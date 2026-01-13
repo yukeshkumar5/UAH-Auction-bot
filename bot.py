@@ -16,7 +16,6 @@ from telegram.ext import (
 )
 
 # --- CONFIGURATION ---
-# REPLACE THIS WITH YOUR TOKEN IF NEEDED
 TOKEN = "8555822248:AAE76zDM4g-e_Ti3Zwg3k4TTEico-Ewyas0"
 
 # Enable logging
@@ -459,7 +458,10 @@ async def show_next_player(context, chat_id):
         auc['current_bid'] = {"amount": base, "holder": None, "holder_team": None}
         
         loop = asyncio.get_event_loop()
-        img_url = await loop.run_in_executor(None, get_player_image, p['Name'])
+        img_url = None
+        try:
+            img_url = await loop.run_in_executor(None, get_player_image, p['Name'])
+        except: pass
         
         caption = (
             f"💎 <strong>LOT #{auc['current_index']+1}</strong>\n"
@@ -469,10 +471,17 @@ async def show_next_player(context, chat_id):
             f"⏳ <strong>30 Seconds Clock</strong>"
         )
         kb = [[InlineKeyboardButton(f"BID {format_price(base)}", callback_data="BID")], [InlineKeyboardButton("SKIP", callback_data="SKIP")]]
-        msg = await context.bot.send_photo(chat_id, photo=img_url, caption=caption, reply_markup=InlineKeyboardMarkup(kb), parse_mode='HTML')
+        
+        if img_url:
+            msg = await context.bot.send_photo(chat_id, photo=img_url, caption=caption, reply_markup=InlineKeyboardMarkup(kb), parse_mode='HTML')
+        else:
+            msg = await context.bot.send_message(chat_id, text=caption, reply_markup=InlineKeyboardMarkup(kb), parse_mode='HTML')
+            
         auc["msg_id"] = msg.message_id
         auc['timer_task'] = asyncio.create_task(auction_timer(context, chat_id))
-    except: pass
+    except Exception as e:
+        await context.bot.send_message(chat_id, f"⚠️ Error: {e}\nSkipping player...")
+        await auto_advance(context, chat_id)
 
 async def auction_timer(context, chat_id):
     try:
@@ -503,11 +512,9 @@ async def update_caption(context, chat_id, text):
 
 async def trigger_rtm_phase(context, chat_id):
     auc = auctions[group_map[chat_id]]
-    
     total_rtms = sum([(auc['rtm_limit'] - t['rtms_used']) for t in auc['teams'].values()])
     
     if total_rtms <= 0:
-        # NO RTMs LEFT -> AUTO SELL
         await handle_result(context, chat_id, sold=True)
         return
 
@@ -515,7 +522,6 @@ async def trigger_rtm_phase(context, chat_id):
     await context.bot.send_message(chat_id, "🔴 <strong>SOLD! RTM Window (10s)</strong>", parse_mode='HTML')
     
     kb = [[InlineKeyboardButton("✋ CLAIM RTM", callback_data="CLAIM_RTM"), InlineKeyboardButton("REBID 🔄", callback_data="REBID")]]
-    
     try: await context.bot.edit_message_reply_markup(chat_id, auc["msg_id"], reply_markup=InlineKeyboardMarkup(kb))
     except: pass
     
@@ -528,12 +534,11 @@ async def rtm_window_timer(context, chat_id):
         await asyncio.sleep(10)
         auc = auctions[group_map[chat_id]]
         
-        # After 10s -> Auto Sell
         try: await context.bot.edit_message_reply_markup(chat_id, auc["msg_id"], reply_markup=None)
         except: pass
         
         if not auc["rtm_claimants"]:
-            # AUTO SELL if no claims
+            # Auto Sell
             try: await context.bot.edit_message_text(chat_id, auc["rtm_admin_msg_id"], text="❌ No RTM Claims. Auto Sold.")
             except: pass
             await handle_result(context, chat_id, sold=True)
@@ -546,9 +551,12 @@ async def handle_result(context, chat_id, sold):
     auc = auctions[group_map[chat_id]]
     p = auc['players'][auc['current_index']]
     
+    # 1. ALWAYS SHOW "NEXT" AND "REBID" BUTTONS
+    kb = [[InlineKeyboardButton("REBID 🔄", callback_data="REBID"), InlineKeyboardButton("NEXT ⏭️", callback_data="NEXT")]]
+    
     if not sold:
         p['Status'] = 'Unsold'
-        cap = f"❌ <strong>UNSOLD</strong>\n\n🏏 <strong>{p['Name']}</strong>\n💰 Base: {format_price(p['BasePrice'])}\n\n<i>Next in 5s...</i>"
+        cap = f"❌ <strong>UNSOLD</strong>\n\n🏏 <strong>{p['Name']}</strong>\n💰 Base: {format_price(p['BasePrice'])}\n\n<i>Next in 20s...</i>"
     else:
         amt = auc['current_bid']['amount']
         holder = auc['current_bid']['holder']
@@ -562,17 +570,18 @@ async def handle_result(context, chat_id, sold):
             w_team['purse'] -= amt
             w_team['squad'].append({'name': p['Name'], 'price': amt, 'type': 'auction', 'rtm': rtm_used})
             p['Status'] = 'Sold'; p['SoldPrice'] = amt; p['SoldTo'] = w_team['name']
-            cap = f"🔴 <strong>SOLD TO {w_team['name']}</strong> 🔴\n\n👤 <strong>{p['Name']}</strong>\n💸 {format_price(amt)}\n💰 Bal: {format_price(w_team['purse'])}\n\n<i>Next in 5s...</i>"
+            cap = f"🔴 <strong>SOLD TO {w_team['name']}</strong> 🔴\n\n👤 <strong>{p['Name']}</strong>\n💸 {format_price(amt)}\n💰 Bal: {format_price(w_team['purse'])}\n\n<i>Next in 20s...</i>"
 
     try: 
-        await context.bot.edit_message_caption(chat_id, auc["msg_id"], caption=cap, reply_markup=None, parse_mode='HTML')
+        await context.bot.edit_message_caption(chat_id, auc["msg_id"], caption=cap, reply_markup=InlineKeyboardMarkup(kb), parse_mode='HTML')
         if auc.get("rtm_admin_msg_id"): await context.bot.delete_message(chat_id, auc["rtm_admin_msg_id"])
     except: pass
     
+    # Auto Advance extended to 20s so admin can click Next/Rebid if needed
     auc['auto_next_task'] = asyncio.create_task(auto_advance(context, chat_id))
 
 async def auto_advance(context, chat_id):
-    await asyncio.sleep(5)
+    await asyncio.sleep(20) # Given ample time to use manual buttons
     await show_next_player(context, chat_id)
 
 async def end_auction_logic(context, chat_id):
@@ -603,6 +612,11 @@ async def bid_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if "RTM" in data or "GRANT" in data or data == "NO_HIKE":
         await handle_rtm_logic(update, context, chat_id)
+        return
+
+    if data == "CONFIRM_SOLD":
+        if user_id not in auc["admins"]: return await query.answer("Admin Only")
+        await handle_result(context, chat_id, sold=True)
         return
 
     if data == "NEXT":
@@ -662,6 +676,7 @@ async def bid_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         auc['skip_voters'] = set()
         await query.answer(f"Bid {format_price(new_amt)}")
         
+        # REFRESH TIMER ON BID
         if auc.get('timer_task'): auc['timer_task'].cancel()
         auc['timer_task'] = asyncio.create_task(auction_timer(context, chat_id))
         
@@ -863,7 +878,6 @@ async def fast_track_player(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args: return await update.message.reply_text("Usage: `/now PlayerName`")
     
     name_query = " ".join(context.args).lower()
-    
     target_idx = -1
     found_player = None
     
@@ -881,7 +895,6 @@ async def fast_track_player(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"🚀 <strong>{found_player['Name']}</strong> is next!", parse_mode='HTML')
 
 async def full_summary_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Only for DM
     if update.effective_chat.type != 'private': return
     
     auc = None
@@ -904,7 +917,6 @@ async def full_summary_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             report += f"   {p_type} {p['name']} - {format_price(p['price'])}{tag}\n"
         report += "\n"
         
-    # Split message if too long
     if len(report) > 4000:
         for x in range(0, len(report), 4000):
             await update.message.reply_text(report[x:x+4000], parse_mode='HTML')
