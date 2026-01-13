@@ -16,6 +16,7 @@ from telegram.ext import (
 )
 
 # --- CONFIGURATION ---
+# REPLACE THIS WITH YOUR TOKEN IF NEEDED
 TOKEN = "8555822248:AAE76zDM4g-e_Ti3Zwg3k4TTEico-Ewyas0"
 
 # Enable logging
@@ -94,6 +95,13 @@ def get_increment(price):
     elif price < 500: return 20
     else: return 50
 
+def get_team_by_owner(user_id):
+    for rid, auc in auctions.items():
+        for code, t in auc['teams'].items():
+            if t['owner'] == user_id or t['sec_owner'] == user_id:
+                return code, t, rid
+    return None, None, None
+
 def get_auction_by_context(update):
     chat_id = update.effective_chat.id
     user_id = update.effective_user.id
@@ -102,13 +110,6 @@ def get_auction_by_context(update):
         for auc in auctions.values():
             if user_id in auc['admins']: return auc
     return None
-
-def get_team_by_owner(user_id):
-    for rid, auc in auctions.items():
-        for code, t in auc['teams'].items():
-            if t['owner'] == user_id or t['sec_owner'] == user_id:
-                return code, t, rid
-    return None, None, None
 
 # ==============================================================================
 # 1. SETUP (DM ONLY)
@@ -333,7 +334,6 @@ async def transfer_team(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(f"🔄 Transferred.\nNew Code: <code>{new_code}</code>", parse_mode='HTML')
 
-# --- SMART RETAIN ---
 async def retain_player(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.type != 'private': return
     uid = update.effective_user.id
@@ -359,21 +359,18 @@ async def retain_player(update: Update, context: ContextTypes.DEFAULT_TYPE):
         t['purse'] -= price
         t['squad'].append({'name': p_name, 'price': price, 'type': 'retained'})
         
-        # --- KEY UPDATE: REMOVE FROM AUCTION POOL ---
         original_len = len(auc['players'])
         auc['players'] = [p for p in auc['players'] if p['Name'].lower().strip() != p_name.lower().strip()]
         
         msg = f"✅ Retained <strong>{p_name}</strong> for {format_price(price)}"
         if len(auc['players']) < original_len: 
             msg += "\n🗑 <strong>Removed from Auction List!</strong>"
-        else:
-            msg += "\n⚠️ Player was not in the file (added manually)."
         
         await update.message.reply_text(msg, parse_mode='HTML')
     except:
         await update.message.reply_text("Usage: <code>/retain CODE Player Name - Price</code>", parse_mode='HTML')
 
-# --- STATS & CHECK ---
+# --- STATS ---
 
 async def team_stats_logic(update, context):
     auc = get_auction_by_context(update)
@@ -420,19 +417,6 @@ async def team_stats_logic(update, context):
             tag = " (RTM)" if p.get('rtm') else ""
             msg += f"{i+1}. {p['name']} - {format_price(p['price'])}{tag}\n"
             
-    await update.message.reply_text(msg, parse_mode='HTML')
-
-async def check_player(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    auc = get_auction_by_context(update)
-    if not auc: return await update.message.reply_text("❌ No active auction.")
-    
-    q = " ".join(context.args).lower()
-    msg = "❌ Not found"
-    for p in auc['players']:
-        if q in p['Name'].lower():
-            if p.get('Status') == 'Sold': msg = f"🔴 <strong>{p['Name']}</strong>: Sold to {p['SoldTo']} ({format_price(p['SoldPrice'])})"
-            elif p.get('Status') == 'Unsold': msg = f"❌ <strong>{p['Name']}</strong>: Unsold"
-            else: msg = f"⏳ <strong>{p['Name']}</strong>: Upcoming"
     await update.message.reply_text(msg, parse_mode='HTML')
 
 # ==============================================================================
@@ -523,7 +507,7 @@ async def trigger_rtm_phase(context, chat_id):
     total_rtms = sum([(auc['rtm_limit'] - t['rtms_used']) for t in auc['teams'].values()])
     
     if total_rtms <= 0:
-        # No RTMs available -> Auto Sell immediately
+        # NO RTMs LEFT -> AUTO SELL
         await handle_result(context, chat_id, sold=True)
         return
 
@@ -549,6 +533,7 @@ async def rtm_window_timer(context, chat_id):
         except: pass
         
         if not auc["rtm_claimants"]:
+            # AUTO SELL if no claims
             try: await context.bot.edit_message_text(chat_id, auc["rtm_admin_msg_id"], text="❌ No RTM Claims. Auto Sold.")
             except: pass
             await handle_result(context, chat_id, sold=True)
@@ -560,7 +545,6 @@ async def rtm_window_timer(context, chat_id):
 async def handle_result(context, chat_id, sold):
     auc = auctions[group_map[chat_id]]
     p = auc['players'][auc['current_index']]
-    kb = [[InlineKeyboardButton("REBID 🔄", callback_data="REBID"), InlineKeyboardButton("NEXT ⏭️", callback_data="NEXT")]]
     
     if not sold:
         p['Status'] = 'Unsold'
@@ -581,11 +565,10 @@ async def handle_result(context, chat_id, sold):
             cap = f"🔴 <strong>SOLD TO {w_team['name']}</strong> 🔴\n\n👤 <strong>{p['Name']}</strong>\n💸 {format_price(amt)}\n💰 Bal: {format_price(w_team['purse'])}\n\n<i>Next in 5s...</i>"
 
     try: 
-        await context.bot.edit_message_caption(chat_id, auc["msg_id"], caption=cap, reply_markup=InlineKeyboardMarkup(kb), parse_mode='HTML')
+        await context.bot.edit_message_caption(chat_id, auc["msg_id"], caption=cap, reply_markup=None, parse_mode='HTML')
         if auc.get("rtm_admin_msg_id"): await context.bot.delete_message(chat_id, auc["rtm_admin_msg_id"])
     except: pass
     
-    # Auto Next Player in 5s
     auc['auto_next_task'] = asyncio.create_task(auto_advance(context, chat_id))
 
 async def auto_advance(context, chat_id):
