@@ -5,6 +5,7 @@ import random
 import string
 import os
 import re
+import sys
 from threading import Thread
 from flask import Flask
 from duckduckgo_search import DDGS
@@ -27,17 +28,20 @@ ASK_NAME, ASK_PURSE, ASK_RTM_COUNT, ASK_FILE = range(4)
 # --- DATA STORAGE ---
 auctions = {}   
 group_map = {}  
-admin_map = {}  # Stores {user_id: room_id} to prevent multiple auctions
+admin_map = {}  
 
 # --- HELPER FUNCTIONS ---
 
 def format_price(value):
-    if value >= 100:
-        cr_val = value / 100
-        if cr_val.is_integer(): return f"{int(cr_val)}C"
-        return f"{round(cr_val, 2)}C"
-    else:
-        return f"{value}L"
+    try:
+        value = float(value)
+        if value >= 100:
+            cr_val = value / 100
+            if cr_val.is_integer(): return f"{int(cr_val)}C"
+            return f"{round(cr_val, 2)}C"
+        else:
+            return f"{int(value)}L"
+    except: return "0L"
 
 def parse_price(value):
     try:
@@ -90,30 +94,17 @@ def get_increment(price):
     elif price < 500: return 20
     else: return 50
 
-def get_team_by_owner(user_id):
-    for code, data in state['teams'].items(): # Will be accessed via auction object usually
-        pass 
-    # Helper to find team in a specific auction instance
-    return None
-
 # ==============================================================================
-# 1. SETUP (DM ONLY) - WITH SINGLE AUCTION CHECK
+# 1. SETUP (DM ONLY)
 # ==============================================================================
 
 async def start_setup(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.type != 'private':
-        await update.message.reply_text("⚠️ Setup must be done in DM!")
+        await update.message.reply_text("⚠️ DM me for setup!")
         return ConversationHandler.END
     
-    user_id = update.effective_user.id
-    
-    # CHECK: Does this user already have an active auction?
-    if user_id in admin_map:
-        await update.message.reply_text("🚫 <strong>You already have an active auction!</strong>\n\nPlease finish that one using <code>/end_auction</code> in the group before starting a new one.", parse_mode='HTML')
-        return ConversationHandler.END
-    
-    context.user_data['setup'] = {"admins": [user_id]}
-    await update.message.reply_text("🛠 <strong>Auction Setup</strong>\n\n1. Enter Auction Name (e.g. IPL 2026):", parse_mode='HTML')
+    context.user_data['setup'] = {"admins": [update.effective_user.id]}
+    await update.message.reply_text("🛠 <strong>Auction Setup</strong>\n\n1. Enter Auction Name:", parse_mode='HTML')
     return ASK_NAME
 
 async def ask_purse(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -135,9 +126,10 @@ async def ask_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def finish_setup(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    
+    # FIX: Get file object then use document.file_name
     file_obj = await update.message.document.get_file()
     file_name = update.message.document.file_name
-    
     path = f"temp_{user_id}_{file_name}"
     
     if file_name.endswith('.csv'):
@@ -174,7 +166,6 @@ async def finish_setup(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "auto_next_task": None
         }
         
-        # Map Admin to Room
         admin_map[user_id] = room_id
         
         await update.message.reply_text(
@@ -286,19 +277,19 @@ async def register(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Check Main Code
     if input_code in auc['teams']:
-        if auc['teams'][input_code]['owner']: return await update.message.reply_text("⚠️ Main Owner Exists!")
+        if auc['teams'][input_code]['owner']: return await update.message.reply_text("⚠️ Taken!")
         auc['teams'][input_code]['owner'] = uid
         auc['teams'][input_code]['owner_name'] = name
-        await update.message.reply_text(f"🎉 <strong>{name}</strong> is Owner of <strong>{auc['teams'][input_code]['name']}</strong>!", parse_mode='HTML')
+        await update.message.reply_text(f"🎉 <strong>{name}</strong> joined <strong>{auc['teams'][input_code]['name']}</strong>!", parse_mode='HTML')
         return
 
     # Check Sub Code
     for code, t in auc['teams'].items():
         if t.get('sub_code') == input_code:
-            if t['sec_owner']: return await update.message.reply_text("⚠️ 2nd Owner Exists!")
+            if t['sec_owner']: return await update.message.reply_text("⚠️ 2nd Owner Taken!")
             t['sec_owner'] = uid
             t['sec_owner_name'] = name
-            await update.message.reply_text(f"🎉 <strong>{name}</strong> joined <strong>{t['name']}</strong> as 2nd Owner!", parse_mode='HTML')
+            await update.message.reply_text(f"🎉 <strong>{name}</strong> joined as 2nd Owner!", parse_mode='HTML')
             return
 
     await update.message.reply_text("❌ Invalid Code.")
@@ -322,7 +313,7 @@ async def transfer_team(update: Update, context: ContextTypes.DEFAULT_TYPE):
     new_code = generate_code(4)
     auc['teams'][new_code] = data
     
-    await update.message.reply_text(f"🔄 Team Transferred.\nNew Code: <code>{new_code}</code>", parse_mode='HTML')
+    await update.message.reply_text(f"🔄 Transferred.\nNew Code: <code>{new_code}</code>", parse_mode='HTML')
 
 async def retain_player(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.type != 'private': return
@@ -341,16 +332,18 @@ async def retain_player(update: Update, context: ContextTypes.DEFAULT_TYPE):
         t['purse'] -= price
         t['squad'].append({'name': p_name, 'price': price, 'type': 'retained'})
         
-        # SMART RETENTION: Remove from Auction Pool
+        # Remove from Auction Pool
         original_len = len(auc['players'])
         auc['players'] = [p for p in auc['players'] if p['Name'].lower() != p_name.lower()]
         
-        msg_extra = ""
-        if len(auc['players']) < original_len: msg_extra = "\n(Removed from Auction List)"
+        msg = f"✅ Retained <strong>{p_name}</strong> for {format_price(price)}"
+        if len(auc['players']) < original_len: msg += "\n(Removed from Auction)"
         
-        await update.message.reply_text(f"✅ Retained <strong>{p_name}</strong> for {format_price(price)}{msg_extra}", parse_mode='HTML')
+        await update.message.reply_text(msg, parse_mode='HTML')
     except:
-        await update.message.reply_text("Usage: <code>/retain CODE Name Price</code>", parse_mode='HTML')
+        await update.message.reply_text("Usage: `/retain CODE Name Price`")
+
+# --- TEAMS & STATS LOGIC ---
 
 async def team_stats_logic(update, context):
     chat_id = update.effective_chat.id
@@ -358,14 +351,17 @@ async def team_stats_logic(update, context):
     auc = auctions[group_map[chat_id]]
     
     args = context.args
-    if not args:
-        msg = "📊 <strong>TEAMS SUMMARY</strong>\n\n"
+    
+    # 1. /stats - Show Summary of ALL Teams
+    if not args or update.message.text.startswith("/stats"):
+        msg = "📊 <strong>AUCTION STATUS</strong>\n\n"
         for t in auc['teams'].values():
             rtms = auc['rtm_limit'] - t['rtms_used']
-            msg += f"🛡 <strong>{t['name']}</strong>: {format_price(t['purse'])} | 👥 {len(t['squad'])} | ✋ {rtms}\n"
+            msg += f"🛡 <strong>{t['name']}</strong>\n💰 {format_price(t['purse'])} | 👥 {len(t['squad'])} | ✋ {rtms}\n\n"
         await update.message.reply_text(msg, parse_mode='HTML')
         return
 
+    # 2. /team [Name] - Show Detailed Squad
     query = " ".join(args).lower()
     found_team = None
     for t in auc['teams'].values():
@@ -379,21 +375,21 @@ async def team_stats_logic(update, context):
     if t['sec_owner_name'] != "None": owners += f" & {t['sec_owner_name']}"
     
     msg = f"🛡 <strong>{t['name']}</strong>\n"
-    msg += f"💰 Balance: <strong>{format_price(t['purse'])}</strong>\n"
-    msg += f"👤 Owners: {owners}\n"
+    msg += f"💰 Balance: {format_price(t['purse'])}\n"
+    msg += f"👤 Owner: {owners}\n"
     msg += f"✋ RTM Left: {rtms}\n\n"
     
     retained = [p for p in t['squad'] if p.get('type') == 'retained']
     auction_buy = [p for p in t['squad'] if p.get('type') == 'auction']
     
     if retained:
-        msg += "🔹 <strong>Retained Players</strong>\n"
+        msg += "🔹 <strong>RETAINED PLAYERS</strong>\n"
         for i, p in enumerate(retained):
             msg += f"{i+1}. {p['name']} - {format_price(p['price'])}\n"
         msg += "\n"
         
     if auction_buy:
-        msg += "🔨 <strong>Auction Players</strong>\n"
+        msg += "🔨 <strong>AUCTION PLAYERS</strong>\n"
         for i, p in enumerate(auction_buy):
             tag = " (RTM)" if p.get('rtm') else ""
             msg += f"{i+1}. {p['name']} - {format_price(p['price'])}{tag}\n"
@@ -546,48 +542,15 @@ async def auto_advance(context, chat_id):
 
 async def end_auction_logic(context, chat_id):
     auc = auctions[group_map[chat_id]]
+    report = f"🏆 <strong>{auc['name']} RESULTS</strong> 🏆\n\n"
+    for t in auc['teams'].values():
+        report += f"🛡 <strong>{t['name']}</strong>\n💰 Rem: {format_price(t['purse'])}\n"
     
-    # Generate Full Report
-    report = f"🏆 <strong>{auc['name']} FULL REPORT</strong> 🏆\n\n"
-    for code, t in auc['teams'].items():
-        owners = t['owner_name']
-        if t['sec_owner_name'] != "None": owners += f" & {t['sec_owner_name']}"
-        
-        report += f"🛡 <strong>{t['name']}</strong>\n"
-        report += f"👤 Owners: {owners}\n"
-        report += f"💰 Rem. Purse: {format_price(t['purse'])}\n"
-        report += f"👥 Squad Size: {len(t['squad'])}\n"
-        
-        retained = [p for p in t['squad'] if p.get('type') == 'retained']
-        auction = [p for p in t['squad'] if p.get('type') == 'auction']
-        
-        if retained:
-            report += "🔹 <strong>Retained:</strong>\n"
-            for p in retained: report += f"   • {p['name']} ({format_price(p['price'])})\n"
-            
-        if auction:
-            report += "🔨 <strong>Auction Buys:</strong>\n"
-            for p in auction: 
-                tag = " (RTM)" if p.get('rtm') else ""
-                report += f"   • {p['name']} ({format_price(p['price'])}){tag}\n"
-        
-        report += "\n----------------------\n\n"
-    
-    # Send to ALL Admins
     for admin_id in auc['admins']:
-        try: 
-            # Split if too long
-            if len(report) > 4000:
-                for x in range(0, len(report), 4000):
-                    await context.bot.send_message(admin_id, report[x:x+4000], parse_mode='HTML')
-            else:
-                await context.bot.send_message(admin_id, report, parse_mode='HTML')
-                
-            # Remove Admin from admin_map to allow them to create NEW auction
-            if admin_id in admin_map: del admin_map[admin_id]
+        try: await context.bot.send_message(admin_id, report, parse_mode='HTML')
         except: pass
     
-    await context.bot.send_message(chat_id, "🛑 <strong>Auction Ended.</strong> Check DM for report.", parse_mode='HTML')
+    await context.bot.send_message(chat_id, "🛑 Auction Ended. Data Cleared.", parse_mode='HTML')
     del auctions[group_map[chat_id]]
     del group_map[chat_id]
 
@@ -602,8 +565,76 @@ async def bid_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if chat_id not in group_map: return await query.answer("Expired")
     auc = auctions[group_map[chat_id]]
     
-    if "RTM" in data or "GRANT" in data or data == "NO_HIKE":
-        await handle_rtm_logic(update, context, chat_id)
+    # RTM LOGIC
+    if data == "CLAIM_RTM":
+        team, code = None, None
+        for c, t in auc['teams'].items():
+            if t['owner'] == user_id or t['sec_owner'] == user_id: team=t; code=c; break
+            
+        if not team: return await query.answer("No Team")
+        if user_id == auc['current_bid']['holder']: return await query.answer("Winner can't RTM", show_alert=True)
+        if team['rtms_used'] >= auc['rtm_limit']: return await query.answer("No RTMs left", show_alert=True)
+        
+        if auc.get('auto_next_task'): auc['auto_next_task'].cancel()
+        auc["rtm_claimants"][user_id] = code
+        await query.answer("Claimed!")
+        
+        names = ", ".join([auc['teams'][c]['name'] for c in auc['rtm_claimants'].values()])
+        kb = []
+        row = []
+        for uid, c in auc['rtm_claimants'].items():
+            row.append(InlineKeyboardButton(f"Grant {auc['teams'][c]['name']}", callback_data=f"GRANT_{c}"))
+            if len(row)==2: kb.append(row); row=[]
+        if row: kb.append(row)
+        kb.append([InlineKeyboardButton("❌ Reject All", callback_data="RTM_REJECT")])
+        try: await context.bot.edit_message_text(chat_id, auc["rtm_admin_msg_id"], text=f"👀 <strong>Claims:</strong> {names}", reply_markup=InlineKeyboardMarkup(kb), parse_mode='HTML')
+        except: pass
+        return
+
+    if "GRANT_" in data:
+        if user_id not in auc["admins"]: return await query.answer("Admin Only")
+        code = data.split("_")[1]
+        auc["selected_rtm_team"] = code
+        # Deduct RTM
+        auc['teams'][code]['rtms_used'] += 1
+        
+        auc["rtm_state"] = "WAITING_HIKE"
+        winner = auc['current_bid']['holder_team']
+        await context.bot.send_message(chat_id, f"✅ <strong>{auc['teams'][code]['name']}</strong> selected!\n(RTM Deducted)\n\n👑 <strong>{winner}</strong>, Type price or:", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("No Hike", callback_data="NO_HIKE")]]), parse_mode='HTML')
+        return
+
+    if data == "RTM_REJECT":
+        if user_id not in auc["admins"]: return await query.answer("Admin Only")
+        await context.bot.send_message(chat_id, "❌ RTM Rejected.")
+        await handle_result(context, chat_id, sold=True)
+        return
+
+    if data == "NO_HIKE":
+        if user_id != auc['current_bid']['holder']: return await query.answer("Not Winner")
+        rtm_t = auc['teams'][auc['selected_rtm_team']]
+        sold_p = auc['current_bid']['amount']
+        await context.bot.send_message(chat_id, f"📉 No Hike.\n<strong>{rtm_t['name']}</strong> wins via RTM @ {format_price(sold_p)}!", parse_mode='HTML')
+        auc['current_bid']['holder'] = rtm_t['owner']
+        auc['current_bid']['holder_team'] = rtm_t['name']
+        auc['players'][auc['current_index']]['rtm_flag'] = True
+        await handle_result(context, chat_id, sold=True)
+        return
+
+    if data in ["RTM_MATCH", "RTM_QUIT"]:
+        rtm_t = auc['teams'][auc['selected_rtm_team']]
+        if user_id != rtm_t['owner'] and user_id != rtm_t['sec_owner']: return await query.answer("Not RTM Team")
+        
+        if data == "RTM_QUIT":
+            await context.bot.send_message(chat_id, f"🏳️ <strong>{rtm_t['name']}</strong> QUITS!", parse_mode='HTML')
+            await handle_result(context, chat_id, sold=True)
+        else:
+            p = auc['current_bid']['amount']
+            if rtm_t['purse'] < p: return await query.answer("Low Funds!", show_alert=True)
+            auc['current_bid']['holder'] = user_id
+            auc['current_bid']['holder_team'] = rtm_t['name']
+            auc['players'][auc['current_index']]['rtm_flag'] = True
+            await context.bot.send_message(chat_id, f"✅ <strong>{rtm_t['name']}</strong> MATCHED!", parse_mode='HTML')
+            await handle_result(context, chat_id, sold=True)
         return
 
     if data == "NEXT":
@@ -659,7 +690,7 @@ async def bid_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         if my_team['purse'] < new_amt: return await query.answer("Low Funds!", show_alert=True)
         
-        auc['current_bid'] = {"amount": new_amt, "holder": user_id, "holder_team": my_team['name']}
+        auc['current_bid'] = {"amount": new_amt, "holder": user.id, "holder_team": my_team['name']}
         auc['skip_voters'] = set()
         await query.answer(f"Bid {format_price(new_amt)}")
         
@@ -673,83 +704,6 @@ async def bid_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         auc['last_kb'] = InlineKeyboardMarkup(kb)
         try: await context.bot.edit_message_caption(chat_id, auc["msg_id"], caption=cap, reply_markup=auc['last_kb'], parse_mode='HTML')
         except: pass
-
-async def handle_rtm_logic(update, context, chat_id):
-    auc = auctions[group_map[chat_id]]
-    query = update.callback_query
-    data = query.data
-    user_id = query.from_user.id
-    
-    if data == "CLAIM_RTM":
-        my_team_code = None
-        my_team = None
-        for c, t in auc['teams'].items():
-            if t['owner'] == user_id or t['sec_owner'] == user_id: my_team_code=c; my_team=t; break
-        
-        if not my_team: return await query.answer("No Team")
-        if user_id == auc['current_bid']['holder']: return await query.answer("Winner can't RTM", show_alert=True)
-        if my_team['rtms_used'] >= auc['rtm_limit']: return await query.answer("No RTMs left", show_alert=True)
-        
-        if auc.get('auto_next_task'): auc['auto_next_task'].cancel()
-        
-        auc["rtm_claimants"][user_id] = my_team_code
-        await query.answer("Claimed!")
-        
-        names = ", ".join([auc['teams'][c]['name'] for c in auc['rtm_claimants'].values()])
-        kb = []
-        row = []
-        for uid, c in auc['rtm_claimants'].items():
-            row.append(InlineKeyboardButton(f"Grant {auc['teams'][c]['name']}", callback_data=f"GRANT_{c}"))
-            if len(row)==2: kb.append(row); row=[]
-        if row: kb.append(row)
-        kb.append([InlineKeyboardButton("❌ Reject All", callback_data="RTM_REJECT")])
-        try: await context.bot.edit_message_text(chat_id, auc["rtm_admin_msg_id"], text=f"👀 <strong>Claims:</strong> {names}", reply_markup=InlineKeyboardMarkup(kb), parse_mode='HTML')
-        except: pass
-        return
-
-    if "GRANT_" in data:
-        if user_id not in auc["admins"]: return await query.answer("Admin Only")
-        code = data.split("_")[1]
-        auc["selected_rtm_team"] = code
-        auc['teams'][code]['rtms_used'] += 1
-        
-        auc["rtm_state"] = "WAITING_HIKE"
-        winner = auc['current_bid']['holder_team']
-        await context.bot.send_message(chat_id, f"✅ <strong>{auc['teams'][code]['name']}</strong> selected!\n(RTM Deducted)\n\n👑 <strong>{winner}</strong>, Type price or:", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("No Hike", callback_data="NO_HIKE")]]), parse_mode='HTML')
-        return
-
-    if data == "RTM_REJECT":
-        if user_id not in auc["admins"]: return await query.answer("Admin Only")
-        await context.bot.send_message(chat_id, "❌ RTM Rejected.")
-        await handle_result(context, chat_id, sold=True)
-        return
-
-    if data == "NO_HIKE":
-        if user_id != auc['current_bid']['holder']: return await query.answer("Not Winner")
-        rtm_t = auc['teams'][auc['selected_rtm_team']]
-        sold_p = auc['current_bid']['amount']
-        await context.bot.send_message(chat_id, f"📉 No Hike.\n<strong>{rtm_t['name']}</strong> wins via RTM @ {format_price(sold_p)}!", parse_mode='HTML')
-        auc['current_bid']['holder'] = rtm_t['owner']
-        auc['current_bid']['holder_team'] = rtm_t['name']
-        auc['players'][auc['current_index']]['rtm_flag'] = True
-        await handle_result(context, chat_id, sold=True)
-        return
-
-    if data in ["RTM_MATCH", "RTM_QUIT"]:
-        rtm_t = auc['teams'][auc['selected_rtm_team']]
-        if user_id != rtm_t['owner'] and user_id != rtm_t['sec_owner']: return await query.answer("Not RTM Team")
-        
-        if data == "RTM_QUIT":
-            await context.bot.send_message(chat_id, f"🏳️ <strong>{rtm_t['name']}</strong> QUITS!", parse_mode='HTML')
-            await handle_result(context, chat_id, sold=True)
-        else:
-            p = auc['current_bid']['amount']
-            if rtm_t['purse'] < p: return await query.answer("Low Funds!", show_alert=True)
-            auc['current_bid']['holder'] = user_id
-            auc['current_bid']['holder_team'] = rtm_t['name']
-            auc['players'][auc['current_index']]['rtm_flag'] = True
-            await context.bot.send_message(chat_id, f"✅ <strong>{rtm_t['name']}</strong> MATCHED!", parse_mode='HTML')
-            await handle_result(context, chat_id, sold=True)
 
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -799,40 +753,46 @@ async def resume_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await show_next_player(context, chat_id)
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = """📚 <strong>FULL COMMAND LIST</strong>
+    await update.message.reply_text("Commands:\n/start (DM)\n/init (Group)\n/promote (Reply)\n/createteam (DM)\n/secondowner (DM)\n/retain (DM)\n/register [Code]\n/stats\n/start_auction\n/end_auction")
 
-<strong>👑 ADMIN COMMANDS (DM)</strong>
-<code>/start</code> - Start Setup
-<code>/createteam TeamName</code> - Generate Team Code
-<code>/secondowner TEAM_CODE</code> - Generate Sub Code
-<code>/transfer OLD_CODE</code> - Transfer team
-<code>/retain TEAM_CODE PlayerName Price</code> - Add retained player
+async def check_player(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    if chat_id not in group_map: return
+    auc = auctions[group_map[chat_id]]
+    q = " ".join(context.args).lower()
+    msg = "❌ Not found"
+    for p in auc['players']:
+        if q in p['Name'].lower():
+            if p.get('Status') == 'Sold': msg = f"🔴 <strong>{p['Name']}</strong>: Sold to {p['SoldTo']} ({format_price(p['SoldPrice'])})"
+            elif p.get('Status') == 'Unsold': msg = f"❌ <strong>{p['Name']}</strong>: Unsold"
+            else: msg = f"⏳ <strong>{p['Name']}</strong>: Upcoming"
+    await update.message.reply_text(msg, parse_mode='HTML')
 
-<strong>📢 GROUP ADMIN</strong>
-<code>/init ROOM_ID</code> - Connect Group
-<code>/promote</code> (Reply) - Add Admin
-<code>/start_auction</code> - Begin
-<code>/end_auction</code> - Stop & Send Report
-<code>/pause</code> / <code>/resume</code> - Control
+async def upcoming(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    if chat_id not in group_map: return
+    auc = auctions[group_map[chat_id]]
+    start = auc['current_index'] + 1
+    ls = auc['players'][start:start+10]
+    msg = "📋 <strong>UPCOMING</strong>\n" + "\n".join([f"{p['Name']} - {format_price(p['BasePrice'])}" for p in ls])
+    await update.message.reply_text(msg, parse_mode='HTML')
 
-<strong>👤 TEAM OWNERS</strong>
-<code>/register CODE</code> - Claim Team
-<code>/team TeamName</code> - View Squad
-<code>/stats</code> - View All Teams
-<code>/check PlayerName</code> - Check status
-<code>/upcoming</code> - Next 10 Players
-"""
+async def completed_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    if chat_id not in group_map: return
+    auc = auctions[group_map[chat_id]]
+    msg = "📜 <strong>SOLD</strong>\n" + "\n".join([f"{p['Name']} -> {p['SoldTo']} ({format_price(p['SoldPrice'])})" for p in auc['players'] if p.get('Status') == 'Sold'])
     await update.message.reply_text(msg, parse_mode='HTML')
 
 # --- SERVER ---
-app = Flask(__name__)
-@app.route('/')
+web_server = Flask(__name__)
+@web_server.route('/')
 def index(): return "Bot Active"
-def run_web_server(): app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
+def run_web_server(): web_server.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
 
 if __name__ == '__main__':
     Thread(target=run_web_server).start()
-    app = ApplicationBuilder().token(TOKEN).build()
+    bot_app = ApplicationBuilder().token(TOKEN).build()
     
     setup = ConversationHandler(
         entry_points=[CommandHandler('start', start_setup)],
@@ -845,26 +805,26 @@ if __name__ == '__main__':
         fallbacks=[CommandHandler('cancel', cancel_setup)]
     )
     
-    app.add_handler(setup)
-    app.add_handler(CommandHandler("help", help_cmd))
-    app.add_handler(CommandHandler("init", init_group))
-    app.add_handler(CommandHandler("promote", promote_admin))
-    app.add_handler(CommandHandler("createteam", create_team))
-    app.add_handler(CommandHandler("secondowner", second_owner_cmd))
-    app.add_handler(CommandHandler("register", register))
-    app.add_handler(CommandHandler("start_auction", start_auction))
-    app.add_handler(CommandHandler("end_auction", end_auction_cmd))
-    app.add_handler(CommandHandler(["team", "teams", "stats"], team_stats_logic))
-    app.add_handler(CommandHandler("retain", retain_player))
-    app.add_handler(CommandHandler("transfer", transfer_team))
-    app.add_handler(CommandHandler("check", check_player))
-    app.add_handler(CommandHandler("upcoming", upcoming))
-    app.add_handler(CommandHandler("completed", completed_list))
-    app.add_handler(CommandHandler("pause", pause_cmd))
-    app.add_handler(CommandHandler("resume", resume_cmd))
+    bot_app.add_handler(setup)
+    bot_app.add_handler(CommandHandler("help", help_cmd))
+    bot_app.add_handler(CommandHandler("init", init_group))
+    bot_app.add_handler(CommandHandler("promote", promote_admin))
+    bot_app.add_handler(CommandHandler("createteam", create_team))
+    bot_app.add_handler(CommandHandler("secondowner", second_owner_cmd))
+    bot_app.add_handler(CommandHandler("register", register))
+    bot_app.add_handler(CommandHandler("start_auction", start_auction))
+    bot_app.add_handler(CommandHandler("end_auction", end_auction_cmd))
+    bot_app.add_handler(CommandHandler(["team", "teams", "stats"], team_stats_logic))
+    bot_app.add_handler(CommandHandler("retain", retain_player))
+    bot_app.add_handler(CommandHandler("transfer", transfer_team))
+    bot_app.add_handler(CommandHandler("check", check_player))
+    bot_app.add_handler(CommandHandler("upcoming", upcoming))
+    bot_app.add_handler(CommandHandler("completed", completed_list))
+    bot_app.add_handler(CommandHandler("pause", pause_cmd))
+    bot_app.add_handler(CommandHandler("resume", resume_cmd))
     
-    app.add_handler(CallbackQueryHandler(bid_handler))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
+    bot_app.add_handler(CallbackQueryHandler(bid_handler))
+    bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
 
     print("Ultra Advanced Bot is Live...")
-    app.run_polling()
+    bot_app.run_polling()
