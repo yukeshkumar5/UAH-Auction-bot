@@ -30,12 +30,17 @@ def normalize_player_data(df):
     data = df.to_dict('records')
     cleaned = []
     for p in data:
+        # Check various column names
         name = p.get('name') or p.get('player') or 'Unknown'
+        role = p.get('role') or p.get('type') or 'Player'
+        country = p.get('country') or p.get('team') or 'Unknown'
+        base = parse_price(str(p.get('baseprice', '20L')))
+        
         cleaned.append({
             'Name': name,
-            'Role': p.get('role', 'Player'),
-            'Country': p.get('country', 'Unknown'),
-            'BasePrice': parse_price(str(p.get('baseprice', '20L'))),
+            'Role': role,
+            'Country': country,
+            'BasePrice': base,
             'Status': 'Upcoming', 
             'SoldPrice': 0,
             'SoldTo': 'None'
@@ -46,13 +51,11 @@ def generate_code(length=5):
     return ''.join(random.choices(string.ascii_uppercase + string.digits, k=length))
 
 def get_player_image(player_name):
-    # AUTO IMAGE SEARCH
     try:
         with DDGS() as ddgs:
             results = list(ddgs.images(keywords=f"{player_name} cricketer", region="in-en", safesearch="on", max_results=1))
             if results: return results[0]['image']
     except: pass
-    # Default Image if search fails
     return "https://upload.wikimedia.org/wikipedia/commons/7/7a/Pollock_to_Hussey.jpg"
 
 def get_increment(price):
@@ -60,3 +63,19 @@ def get_increment(price):
     elif price < 200: return 10
     elif price < 500: return 20
     else: return 50
+
+def get_auction_by_context(update):
+    chat_id = update.effective_chat.id
+    user_id = update.effective_user.id
+    # Check Group
+    if chat_id in group_map: return auctions[group_map[chat_id]]
+    # Check DM (Admin)
+    if update.effective_chat.type == 'private':
+        for auc in auctions.values():
+            if user_id in auc['admins']: return auc
+    return None
+
+def get_team_by_name(auc, name):
+    for code, t in auc['teams'].items():
+        if t['name'].lower() == name.lower(): return code, t
+    return None, None

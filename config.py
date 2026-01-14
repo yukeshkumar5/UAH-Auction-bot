@@ -4,7 +4,7 @@ import sys
 # REPLACE WITH YOUR TOKEN
 TOKEN = "8555822248:AAE76zDM4g-e_Ti3Zwg3k4TTEico-Ewyas0"
 
-# GLOBAL DATABASES
+# GLOBAL DATA
 auctions = {}   
 group_map = {}  
 admin_map = {}
