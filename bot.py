@@ -6,6 +6,7 @@ import string
 import os
 import re
 import sys
+import asyncpg
 from threading import Thread
 from flask import Flask
 from duckduckgo_search import DDGS
@@ -17,6 +18,8 @@ from telegram.ext import (
 
 # --- CONFIGURATION ---
 TOKEN = "8555822248:AAE76zDM4g-e_Ti3Zwg3k4TTEico-Ewyas0"
+DB_URL = os.getenv("DATABASE_URL")
+
 
 # Enable logging
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
@@ -528,10 +531,10 @@ async def auction_timer(context, chat_id):
         
         auc = auctions[group_map[chat_id]]
         if auc['current_bid']['holder'] is None:
-            await handle_result(context, chat_id, sold=False)
+            await dramatic_close(context, chat_id, sold=False)
         else:
-            await handle_result(context, chat_id, sold=True)
-    except asyncio.CancelledError: pass
+            await dramatic_close(context, chat_id, sold=True)
+
 
 async def update_caption(context, chat_id, text):
     auc = auctions[group_map[chat_id]]
@@ -540,6 +543,25 @@ async def update_caption(context, chat_id, text):
     info = f"🔨 <strong>Current:</strong> {format_price(b['amount'])} ({b['holder_team']})" if b['holder'] else f"💰 <strong>Base:</strong> {format_price(p['BasePrice'])}"
     try: await context.bot.edit_message_caption(chat_id, auc["msg_id"], caption=f"💎 <strong>{p['Name']}</strong>\n{info}\n{text}", reply_markup=auc.get('last_kb'), parse_mode='HTML')
     except: pass
+
+async def dramatic_close(context, chat_id, sold: bool):
+    auc = auctions[group_map[chat_id]]
+    p = auc['players'][auc['current_index']]
+
+    try:
+        await update_caption(context, chat_id, "🔨 <strong>Going once…</strong>")
+        await asyncio.sleep(2)
+
+        await update_caption(context, chat_id, "🔨 <strong>Going twice…</strong>")
+        await asyncio.sleep(2)
+
+        if sold:
+            await handle_result(context, chat_id, sold=True)
+        else:
+            await handle_result(context, chat_id, sold=False)
+
+    except asyncio.CancelledError:
+        pass
 
 async def handle_result(context, chat_id, sold):
     auc = auctions[group_map[chat_id]]
@@ -884,6 +906,19 @@ async def end_auction_logic(context, chat_id):
     # CLEANUP
     if auc['connected_group'] in group_map: del group_map[auc['connected_group']]
     if auc['room_id'] in auctions: del auctions[auc['room_id']]
+    import asyncpg
+    from datetime import datetime
+
+    async def save_auction_to_db(auc):
+        conn = await asyncpg.connect(DB_URL)
+
+        await conn.execute("""
+            INSERT INTO auctions (name, room_id, ended_at)
+            VALUES ($1, $2, $3)
+    """, auc["name"], auc["room_id"], datetime.utcnow())
+
+    await conn.close()
+
 
 async def pause_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -1012,6 +1047,31 @@ async def full_summary_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(report[x:x+4000], parse_mode='HTML')
     else:
         await update.message.reply_text(report, parse_mode='HTML')
+async def last_auction_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    import asyncpg
+
+    conn = await asyncpg.connect(DB_URL)
+
+    row = await conn.fetchrow("""
+        SELECT name, room_id, ended_at
+        FROM auctions
+        ORDER BY ended_at DESC
+        LIMIT 1
+    """)
+
+    await conn.close()
+
+    if not row:
+        return await update.message.reply_text("❌ No auction data found.")
+
+    msg = (
+        f"🏆 <strong>Last Auction</strong>\n\n"
+        f"📛 Name: {row['name']}\n"
+        f"🆔 Room: {row['room_id']}\n"
+        f"🕒 Ended: {row['ended_at']}"
+    )
+
+    await update.message.reply_text(msg, parse_mode="HTML")
 
 # --- SERVER ---
 app = Flask(__name__)
@@ -1055,6 +1115,8 @@ if __name__ == '__main__':
     bot_app.add_handler(CommandHandler("summary", full_summary_cmd))
     bot_app.add_handler(CommandHandler("rtm", manual_rtm_command))
     bot_app.add_handler(CommandHandler("rtmedit", edit_rtm_count))
+    bot_app.add_handler(CommandHandler("lastauction", last_auction_cmd))
+
     
     bot_app.add_handler(CallbackQueryHandler(bid_handler))
     bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
