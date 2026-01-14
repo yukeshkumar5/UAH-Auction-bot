@@ -2,4 +2,9 @@ python-telegram-bot
 pandas
 openpyxl
 duckduckgo-search
+<<<<<<< HEAD
 Flask
+=======
+Flask
+gunicorn
+>>>>>>> 2d1312b3139ad718ec9b8a4dffc977c90a4907cd
