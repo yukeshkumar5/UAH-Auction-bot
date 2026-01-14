@@ -7,31 +7,32 @@ import os
 
 ASK_NAME, ASK_PURSE, ASK_RTM_COUNT, ASK_FILE = range(4)
 
+# --- SETUP HANDLERS ---
 async def start_setup(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.type != 'private':
-        await update.message.reply_text("⚠️ DM me for setup!")
+        await update.message.reply_text("⚠️ Setup in DM only!")
         return ConversationHandler.END
     context.user_data['setup'] = {"admins": [update.effective_user.id]}
-    await update.message.reply_text("🛠 <strong>Auction Setup</strong>\n1. Enter Auction Name:", parse_mode='HTML')
+    await update.message.reply_text("🛠 <strong>Setup</strong>\n1. Auction Name:", parse_mode='HTML')
     return ASK_NAME
 
-async def ask_purse(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def ask_purse(update, context):
     context.user_data['setup']['name'] = update.message.text
-    await update.message.reply_text("2. Enter Default Purse (e.g. 100C):")
+    await update.message.reply_text("2. Default Purse (e.g. 100C):")
     return ASK_PURSE
 
-async def ask_rtm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def ask_rtm(update, context):
     context.user_data['setup']['purse'] = parse_price(update.message.text)
-    await update.message.reply_text("3. RTMs per team? (0 for none):")
+    await update.message.reply_text("3. RTMs per team?")
     return ASK_RTM_COUNT
 
-async def ask_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def ask_file(update, context):
     try: context.user_data['setup']['rtm_limit'] = int(update.message.text)
     except: context.user_data['setup']['rtm_limit'] = 0
-    await update.message.reply_text("4. Upload Player CSV/Excel:")
+    await update.message.reply_text("4. Upload CSV/Excel:")
     return ASK_FILE
 
-async def finish_setup(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def finish_setup(update, context):
     user_id = update.effective_user.id
     file = await update.message.document.get_file()
     fname = update.message.document.file_name
@@ -61,11 +62,11 @@ async def finish_setup(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "current_index": -1,
             "current_bid": {"amount": 0, "holder": None},
             "skip_voters": set(),
-            "rtm_state": None, "rtm_claimants": {}, "timer_task": None, "last_kb": None
+            "rtm_state": None, "rtm_data": {}, "rtm_claimants": {}, "timer_task": None, "last_kb": None
         }
         admin_map[user_id] = rid
         if os.path.exists(path): os.remove(path)
-        await update.message.reply_text(f"✅ Created! Room ID: <code>{rid}</code>\nGo to group -> /init {rid}", parse_mode='HTML')
+        await update.message.reply_text(f"✅ Ready! ID: <code>{rid}</code>\nGo to group -> /init {rid}", parse_mode='HTML')
         return ConversationHandler.END
     except Exception as e:
         await update.message.reply_text(f"Error: {e}")
@@ -75,22 +76,21 @@ async def cancel_setup(update, context):
     await update.message.reply_text("Cancelled.")
     return ConversationHandler.END
 
-async def create_team(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# --- TEAM HANDLERS ---
+async def create_team(update, context):
     uid = update.effective_user.id
     if uid not in admin_map: return
     auc = auctions[admin_map[uid]]
     name = " ".join(context.args)
-    if not name: return await update.message.reply_text("Usage: /createteam Name")
-    
     code = generate_code(4)
     auc['teams'][code] = {
         'name': name, 'owner': None, 'owner_name': "Vacant", 
         'sec_owner': None, 'sec_owner_name': "None", 'sub_code': None,
         'purse': auc['default_purse'], 'squad': [], 'rtms_used': 0
     }
-    await update.message.reply_text(f"✅ Team: <strong>{name}</strong>\nCode: <code>{code}</code>", parse_mode='HTML')
+    await update.message.reply_text(f"✅ Team: {name}\nCode: <code>{code}</code>", parse_mode='HTML')
 
-async def init_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def init_group(update, context):
     chat_id = update.effective_chat.id
     if not context.args: return
     rid = context.args[0]
@@ -101,17 +101,14 @@ async def init_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
         group_map[chat_id] = rid
         await update.message.reply_text(f"✅ Connected: {auctions[rid]['name']}")
 
-async def register(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def register(update, context):
     chat_id = update.effective_chat.id
     if chat_id not in group_map: return
     auc = auctions[group_map[chat_id]]
     code = context.args[0] if context.args else ""
     uid = update.effective_user.id
     
-    # Check Admin
-    if uid in auc['admins']: return await update.message.reply_text("Admins cannot join!")
-    
-    # Check Duplicate
+    if uid in auc['admins']: return await update.message.reply_text("Admins can't join!")
     for t in auc['teams'].values():
         if t['owner'] == uid: return await update.message.reply_text("You have a team!")
         
@@ -120,13 +117,17 @@ async def register(update: Update, context: ContextTypes.DEFAULT_TYPE):
         auc['teams'][code]['owner'] = uid
         auc['teams'][code]['owner_name'] = update.effective_user.first_name
         await update.message.reply_text(f"✅ Joined {auc['teams'][code]['name']}")
-    else:
-        await update.message.reply_text("Invalid Code")
+    else: await update.message.reply_text("Invalid Code")
 
-async def team_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def team_stats(update, context):
     chat_id = update.effective_chat.id
-    if chat_id not in group_map: return
-    auc = auctions[group_map[chat_id]]
+    auc = None
+    if update.effective_chat.type == 'private':
+        for a in auctions.values():
+            if update.effective_user.id in a['admins']: auc = a; break
+    elif chat_id in group_map: auc = auctions[group_map[chat_id]]
+    
+    if not auc: return await update.message.reply_text("No auction.")
     
     msg = "📊 <strong>TEAMS</strong>\n"
     for t in auc['teams'].values():

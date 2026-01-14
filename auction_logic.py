@@ -3,7 +3,7 @@ from config import auctions, group_map
 from utils import format_price, get_player_image, get_increment, parse_price
 import asyncio
 
-async def start_auction(update: Update, context):
+async def start_auction(update, context):
     chat_id = update.effective_chat.id
     if chat_id not in group_map: return
     auc = auctions[group_map[chat_id]]
@@ -24,11 +24,10 @@ async def show_next_player(context, chat_id):
     base = p.get('BasePrice', 20)
     auc['current_bid'] = {"amount": base, "holder": None, "holder_team": None}
     
-    # Send Image
+    # IMAGE SEARCH (ASYNC)
     loop = asyncio.get_event_loop()
     img = None
-    try:
-        img = await loop.run_in_executor(None, get_player_image, p['Name'])
+    try: img = await loop.run_in_executor(None, get_player_image, p['Name'])
     except: pass
     
     kb = [[InlineKeyboardButton(f"BID {format_price(base)}", callback_data="BID")], 
@@ -37,10 +36,8 @@ async def show_next_player(context, chat_id):
     
     caption = f"💎 <strong>{p['Name']}</strong>\n💰 Base: {format_price(base)}\n⏳ <strong>30s Clock</strong>"
     
-    if img:
-        msg = await context.bot.send_photo(chat_id, photo=img, caption=caption, reply_markup=auc['last_kb'], parse_mode='HTML')
-    else:
-        msg = await context.bot.send_message(chat_id, text=caption, reply_markup=auc['last_kb'], parse_mode='HTML')
+    if img: msg = await context.bot.send_photo(chat_id, photo=img, caption=caption, reply_markup=auc['last_kb'], parse_mode='HTML')
+    else: msg = await context.bot.send_message(chat_id, text=caption, reply_markup=auc['last_kb'], parse_mode='HTML')
         
     auc['msg_id'] = msg.message_id
     auc['timer_task'] = asyncio.create_task(auction_timer(context, chat_id))
@@ -56,35 +53,22 @@ async def auction_timer(context, chat_id):
         await asyncio.sleep(2)
         
         auc = auctions[group_map[chat_id]]
-        if auc['current_bid']['holder']:
-            await trigger_rtm(context, chat_id)
-        else:
-            await handle_unsold(context, chat_id)
-            
-    except asyncio.CancelledError:
-        pass
+        if auc['current_bid']['holder']: await trigger_rtm(context, chat_id)
+        else: await handle_result(context, chat_id, sold=False)
+    except asyncio.CancelledError: pass
 
 async def update_ui(context, chat_id, text):
     auc = auctions[group_map[chat_id]]
     p = auc['players'][auc['current_index']]
     b = auc['current_bid']
-    
     info = f"🔨 <strong>{format_price(b['amount'])}</strong> ({b['holder_team']})" if b['holder'] else f"💰 Base: {format_price(p['BasePrice'])}"
-    
-    try: 
-        await context.bot.edit_message_caption(
-            chat_id, auc['msg_id'], 
-            caption=f"💎 <strong>{p['Name']}</strong>\n{info}\n{text}", 
-            reply_markup=auc['last_kb'], 
-            parse_mode='HTML'
-        )
+    try: await context.bot.edit_message_caption(chat_id, auc['msg_id'], caption=f"💎 <strong>{p['Name']}</strong>\n{info}\n{text}", reply_markup=auc['last_kb'], parse_mode='HTML')
     except: pass
 
-async def bid_handler(update: Update, context):
+async def bid_handler(update, context):
     query = update.callback_query
     chat_id = update.effective_chat.id
     user_id = query.from_user.id
-    
     if chat_id not in group_map: return
     auc = auctions[group_map[chat_id]]
     
@@ -92,53 +76,76 @@ async def bid_handler(update: Update, context):
         my_team = None
         for t in auc['teams'].values():
             if t['owner'] == user_id: my_team = t; break
-            
         if not my_team: return await query.answer("No Team!", show_alert=True)
-        if auc['current_bid']['holder'] == user_id: return await query.answer("You hold the bid!", show_alert=True)
+        if auc['current_bid']['holder'] == user_id: return await query.answer("Winning!", show_alert=True)
 
         curr = auc['current_bid']['amount']
         new_amt = curr if auc['current_bid']['holder'] is None else curr + get_increment(curr)
         
         if my_team['purse'] < new_amt: return await query.answer("Low Funds!", show_alert=True)
 
-        # KILL OLD TIMER FIRST
+        # KILL TIMER & UPDATE
         if auc.get('timer_task'): auc['timer_task'].cancel()
-        
         auc['current_bid'] = {"amount": new_amt, "holder": user_id, "holder_team": my_team['name']}
-        
-        # RESTART TIMER
         auc['timer_task'] = asyncio.create_task(auction_timer(context, chat_id))
         
-        await query.answer(f"Bid Placed: {format_price(new_amt)}")
+        await query.answer(f"Bid: {format_price(new_amt)}")
         
         # UPDATE UI
         next_bid = new_amt + get_increment(new_amt)
-        kb = [[InlineKeyboardButton(f"BID {format_price(next_bid)}", callback_data="BID")], 
-              [InlineKeyboardButton("SKIP", callback_data="SKIP")]]
+        kb = [[InlineKeyboardButton(f"BID {format_price(next_bid)}", callback_data="BID")], [InlineKeyboardButton("SKIP", callback_data="SKIP")]]
         auc['last_kb'] = InlineKeyboardMarkup(kb)
-        
         await update_ui(context, chat_id, "⏳ <strong>Timer Reset!</strong>")
 
     elif query.data == "NEXT":
         if user_id not in auc["admins"]: return await query.answer("Admin Only")
         await show_next_player(context, chat_id)
 
-async def handle_unsold(context, chat_id):
+    elif query.data == "CONFIRM_SOLD":
+        if user_id not in auc["admins"]: return await query.answer("Admin Only")
+        await handle_result(context, chat_id, sold=True)
+
+async def handle_result(context, chat_id, sold):
     auc = auctions[group_map[chat_id]]
-    kb = [[InlineKeyboardButton("NEXT ⏭️", callback_data="NEXT")]]
-    await context.bot.send_message(chat_id, "❌ UNSOLD", reply_markup=InlineKeyboardMarkup(kb))
+    p = auc['players'][auc['current_index']]
+    kb = [[InlineKeyboardButton("REBID 🔄", callback_data="REBID"), InlineKeyboardButton("NEXT ⏭️", callback_data="NEXT")]]
+    
+    if not sold:
+        cap = f"❌ <strong>UNSOLD</strong>\n\n🏏 <strong>{p['Name']}</strong>"
+    else:
+        amt = auc['current_bid']['amount']
+        holder = auc['current_bid']['holder']
+        
+        w_team = None
+        for t in auc['teams'].values():
+            if t['owner'] == holder: w_team = t; break
+            
+        if w_team:
+            w_team['purse'] -= amt
+            w_team['squad'].append({'name': p['Name'], 'price': amt})
+            p['Status'] = 'Sold'
+            cap = f"🔴 <strong>SOLD TO {w_team['name']}</strong>\n💸 {format_price(amt)}"
+
+    try: 
+        await context.bot.edit_message_caption(chat_id, auc["msg_id"], caption=cap, reply_markup=InlineKeyboardMarkup(kb), parse_mode='HTML')
+        if auc.get("rtm_admin_msg_id"): await context.bot.delete_message(chat_id, auc["rtm_admin_msg_id"])
+    except: pass
 
 async def trigger_rtm(context, chat_id):
     auc = auctions[group_map[chat_id]]
-    b = auc['current_bid']
-    # Sell immediately for now (RTM expansion logic can go here)
-    await context.bot.send_message(chat_id, f"🔴 <strong>SOLD to {b['holder_team']}</strong> for {format_price(b['amount'])}", parse_mode='HTML')
+    # Check if RTMs exist
+    total_rtms = sum([(auc['rtm_limit'] - t['rtms_used']) for t in auc['teams'].values()])
+    if total_rtms <= 0:
+        await handle_result(context, chat_id, sold=True)
+        return
+
+    auc["rtm_state"] = "CLAIMING"
+    await context.bot.send_message(chat_id, "🔴 <strong>SOLD! RTM Window (10s)</strong>", parse_mode='HTML')
+    msg = await context.bot.send_message(chat_id, "👀 <strong>Claims:</strong> None", parse_mode='HTML')
+    auc["rtm_admin_msg_id"] = msg.message_id
     
-    for t in auc['teams'].values():
-        if t['name'] == b['holder_team']:
-            t['purse'] -= b['amount']
-            t['squad'].append(auc['players'][auc['current_index']]['Name'])
-            break
-            
-    kb = [[InlineKeyboardButton("NEXT ⏭️", callback_data="NEXT")]]
-    await context.bot.send_message(chat_id, "Click Next.", reply_markup=InlineKeyboardMarkup(kb))
+    # For RTM logic, you'd add the 10s wait and button handling here similar to previous steps.
+    # To keep it simple for this file:
+    await asyncio.sleep(10)
+    kb = [[InlineKeyboardButton("✅ MARK SOLD", callback_data="CONFIRM_SOLD")]]
+    await context.bot.send_message(chat_id, "⏳ Time Up! Confirm Sale.", reply_markup=InlineKeyboardMarkup(kb))

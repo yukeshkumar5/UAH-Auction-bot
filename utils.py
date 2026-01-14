@@ -30,8 +30,9 @@ def normalize_player_data(df):
     data = df.to_dict('records')
     cleaned = []
     for p in data:
+        name = p.get('name') or p.get('player') or 'Unknown'
         cleaned.append({
-            'Name': p.get('name', 'Unknown'),
+            'Name': name,
             'Role': p.get('role', 'Player'),
             'Country': p.get('country', 'Unknown'),
             'BasePrice': parse_price(str(p.get('baseprice', '20L'))),
@@ -45,11 +46,13 @@ def generate_code(length=5):
     return ''.join(random.choices(string.ascii_uppercase + string.digits, k=length))
 
 def get_player_image(player_name):
+    # AUTO IMAGE SEARCH
     try:
         with DDGS() as ddgs:
             results = list(ddgs.images(keywords=f"{player_name} cricketer", region="in-en", safesearch="on", max_results=1))
             if results: return results[0]['image']
     except: pass
+    # Default Image if search fails
     return "https://upload.wikimedia.org/wikipedia/commons/7/7a/Pollock_to_Hussey.jpg"
 
 def get_increment(price):

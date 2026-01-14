@@ -4,12 +4,12 @@ import sys
 # REPLACE WITH YOUR TOKEN
 TOKEN = "8555822248:AAE76zDM4g-e_Ti3Zwg3k4TTEico-Ewyas0"
 
-# GLOBAL DATA STORAGE
+# GLOBAL DATABASES
 auctions = {}   
 group_map = {}  
 admin_map = {}
 
-# LOGGING SETUP
+# LOGGING
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO,
