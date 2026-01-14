@@ -794,11 +794,15 @@ async def bid_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if auc['current_bid']['holder'] == user_id: return await query.answer("Wait!", show_alert=True)
         
         curr = auc['current_bid']['amount']
-        new_amt = curr + get_increment(curr) if auc['current_bid']['holder'] else curr
+        if auc['current_bid']['holder'] is None:
+            new_amt = curr
+        else:
+            new_amt = curr + get_increment(curr)
+
         
         if my_team['purse'] < new_amt: return await query.answer("Low Funds!", show_alert=True)
         
-        auc['current_bid'] = {"amount": new_amt, "holder": user.id, "holder_team": my_team['name']}
+        auc['current_bid'] = {"amount": new_amt, "holder": user_id, "holder_team": my_team['name']}
         auc['skip_voters'] = set()
         await query.answer(f"Bid {format_price(new_amt)}")
         
