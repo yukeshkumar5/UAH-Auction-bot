@@ -773,6 +773,26 @@ async def bid_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # --- NORMAL FLOW ---
+    if data == "RANDOM":
+        if user_id not in auc["admins"]:
+            return await query.answer("Admin only")
+
+        upcoming = [p for p in auc["players"] if p["Status"] == "Upcoming"]
+        if not upcoming:
+            return await query.answer("No players")
+
+    chosen = random.choice(upcoming)
+    auc["players"].remove(chosen)
+    auc["players"].insert(auc["current_index"] + 1, chosen)
+
+    await query.answer("Random selected")
+    await context.bot.send_message(
+        chat_id,
+        f"🎲 Random Player Next: <strong>{chosen['Name']}</strong>",
+        parse_mode="HTML"
+    )
+    return
+
 
     if data == "NEXT":
         if user_id not in auc["admins"]: return await query.answer("Admin Only")
@@ -893,6 +913,8 @@ async def end_auction_btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def end_auction_logic(context, chat_id):
     auc = auctions[group_map[chat_id]]
+    await save_auction_to_db(auc)
+
     report = f"🏆 <strong>{auc['name']} RESULTS</strong> 🏆\n\n"
     for t in auc['teams'].values():
         report += f"🛡 <strong>{t['name']}</strong>\n💰 Rem: {format_price(t['purse'])}\n"
@@ -908,17 +930,6 @@ async def end_auction_logic(context, chat_id):
     if auc['room_id'] in auctions: del auctions[auc['room_id']]
     import asyncpg
     from datetime import datetime
-
-    async def save_auction_to_db(auc):
-        conn = await asyncpg.connect(DB_URL)
-
-        await conn.execute("""
-            INSERT INTO auctions (name, room_id, ended_at)
-            VALUES ($1, $2, $3)
-    """, auc["name"], auc["room_id"], datetime.utcnow())
-
-    await conn.close()
-
 
 async def pause_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -1018,6 +1029,17 @@ async def fast_track_player(update: Update, context: ContextTypes.DEFAULT_TYPE):
     auc['players'].insert(auc['current_index'] + 1, found_player)
     
     await update.message.reply_text(f"🚀 <strong>{found_player['Name']}</strong> is next!", parse_mode='HTML')
+from datetime import datetime
+
+async def save_auction_to_db(auc):
+    conn = await asyncpg.connect(DB_URL)
+    await conn.execute(
+        "INSERT INTO auctions (name, room_id, ended_at) VALUES ($1, $2, $3)",
+        auc["name"],
+        auc["room_id"],
+        datetime.utcnow()
+    )
+    await conn.close()
 
 async def full_summary_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.type != 'private': return
