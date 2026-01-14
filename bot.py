@@ -128,7 +128,7 @@ async def start_setup(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     user_id = update.effective_user.id
     if user_id in admin_map:
-        await update.message.reply_text("🚫 <strong>Active Auction Exists!</strong>\nUse <code>/end_auction</code> in group first.", parse_mode='HTML')
+        await update.message.reply_text("🚫 <strong>Active Auction Exists!!</strong>\nUse <code>/end_auction</code> in group first.", parse_mode='HTML')
         return ConversationHandler.END
     
     context.user_data['setup'] = {"admins": [user_id]}
