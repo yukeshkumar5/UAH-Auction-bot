@@ -494,7 +494,14 @@ async def show_next_player(context, chat_id):
             f"💰 <strong>Base Price:</strong> {format_price(base)}\n"
             f"⏳ <strong>30 Seconds Clock</strong>"
         )
-        kb = [[InlineKeyboardButton(f"BID {format_price(base)}", callback_data="BID")], [InlineKeyboardButton("SKIP", callback_data="SKIP")]]
+        kb = [
+            [InlineKeyboardButton(f"BID {format_price(base)}", callback_data="BID")],
+            [
+                InlineKeyboardButton("SKIP", callback_data="SKIP"),
+                InlineKeyboardButton("RANDOM 🎲", callback_data="RANDOM")
+            ]
+        ]
+
         
         auc['last_kb'] = InlineKeyboardMarkup(kb)
         
