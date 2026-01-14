@@ -1,5 +1,5 @@
-python-telegram-bot
+python-telegram-bot==20.6
 pandas
 openpyxl
-duckduckgo-search
-Flask
+flask
+psycopg2-binary
