@@ -978,11 +978,15 @@ async def end_auction_btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def end_auction_logic(context, chat_id):
     auc = auctions[group_map[chat_id]]
-
-    import copy
-    final_snapshot = copy.deepcopy(auc)
+    
+    final_snapshot = {
+        "name": auc["name"],
+        "room_id": auc["room_id"],
+        "teams": auc["teams"]
+    }
 
     await save_last_auction(final_snapshot)
+
 
     report = f"🏆 <strong>{auc['name']} RESULTS</strong> 🏆\n\n"
     for t in auc['teams'].values():
