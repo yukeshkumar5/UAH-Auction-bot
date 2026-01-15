@@ -182,7 +182,9 @@ async def finish_setup(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "rtm_state": None, # 'HIKE_DECISION', 'WAITING_HIKE', 'MATCH_DECISION'
             "rtm_data": {},    # Stores temp RTM data
             "timer_task": None,
-            "last_kb": None
+            "last_kb": None,
+            "ended": False,
+            "ended_at": None
 
         }
         
@@ -1037,35 +1039,41 @@ async def end_auction_btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if update.effective_user.id in auctions[group_map[chat_id]]['admins']:
             kb = [[InlineKeyboardButton("✅ YES, END IT", callback_data="CONFIRM_END"), InlineKeyboardButton("❌ CANCEL", callback_data="CANCEL_END")]]
             await update.message.reply_text("🛑 <strong>Are you sure you want to end?</strong>", reply_markup=InlineKeyboardMarkup(kb), parse_mode='HTML')
-
 async def end_auction_logic(context, chat_id):
     auc = auctions[group_map[chat_id]]
 
     # 🔒 MARK AS ENDED
     auc["ended"] = True
     auc["is_active"] = False
+    auc["is_paused"] = True
 
     # ⏱️ STOP TIMER
     if auc.get("timer_task"):
         auc["timer_task"].cancel()
 
+    # 🔕 DISABLE LAST BUTTONS (if any)
+    try:
+        await context.bot.edit_message_reply_markup(
+            chat_id=chat_id,
+            message_id=auc.get("msg_id"),
+            reply_markup=None
+        )
+    except:
+        pass
+
     # 💾 SAVE DATA
     import copy
-    final_snapshot = copy.deepcopy(auc)
-    save_last_auction(final_snapshot)
+    save_last_auction(copy.deepcopy(auc))
 
+    # 📢 ANNOUNCE END (ONLY ONCE)
     await context.bot.send_message(
         chat_id,
-        "🛑 <b>Auction Ended.</b>\nAdmins can review results.",
+        "🛑 <b>AUCTION ENDED</b>\n\n"
+        "❌ All bidding and admin actions are now disabled.\n"
+        "📊 Team info is available for 24 hours.",
         parse_mode="HTML"
     )
 
-    # 🧹 CLEAN MEMORY (AFTER MESSAGE)
-    for admin_id in auc["admins"]:
-        admin_map.pop(admin_id, None)
-
-    group_map.pop(chat_id, None)
-    auctions.pop(auc["room_id"], None)
 
 async def pause_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -1115,6 +1123,9 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 ━━━━━━━━━━━━━━━━━━━━
 /init <i>ROOM_ID</i>  
 → Connect auction to group
+
+/unlink
+→ Immediately disconnects the auction from the group.
 
 /promote (reply to user)  
 → Promote user as auction admin
@@ -1381,6 +1392,46 @@ async def setbid_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="HTML"
     )
 
+async def unlink_group_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+
+    # Group only
+    if chat_id not in group_map:
+        return await update.message.reply_text("❌ No active auction linked.")
+
+    auc = auctions[group_map[chat_id]]
+
+    # Admin only
+    if update.effective_user.id not in auc["admins"]:
+        return await update.message.reply_text("❌ Admin only.")
+
+    # ⏱ Stop timer if running
+    if auc.get("timer_task"):
+        auc["timer_task"].cancel()
+
+    # 💾 Save auction (optional but good)
+    try:
+        import copy
+        save_last_auction(copy.deepcopy(auc))
+    except:
+        pass
+
+    # 🧹 HARD UNLINK
+    room_id = auc["room_id"]
+
+    for admin_id in auc["admins"]:
+        admin_map.pop(admin_id, None)
+
+    group_map.pop(chat_id, None)
+    auctions.pop(room_id, None)
+
+    await update.message.reply_text(
+        "🔌 <b>AUCTION UNLINKED</b>\n\n"
+        "✅ Group is disconnected\n"
+        "❌ All auction commands disabled\n"
+        "🆕 You can start a new auction anytime",
+        parse_mode="HTML"
+    )
 
 async def remove_player_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -1485,6 +1536,7 @@ if __name__ == '__main__':
     
     bot_app.add_handler(setup)
     bot_app.add_handler(CommandHandler("help", help_cmd))
+    bot_app.add_handler(CommandHandler("unlink", unlink_group_cmd))
     bot_app.add_handler(CommandHandler("setbid", setbid_cmd))
     bot_app.add_handler(CommandHandler("init", init_group))
     bot_app.add_handler(CommandHandler("promote", promote_admin))
