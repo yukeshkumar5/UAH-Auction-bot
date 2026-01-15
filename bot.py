@@ -1107,9 +1107,6 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 /rtmedit <i>TEAM_CODE COUNT</i>  
 → Manually edit remaining RTMs for a team
 
-/remove <i>TEAM NAME PLAYER NAME </i>
-→ Manually Remove Player From Team
-
 /summary  
 → Full auction report (DM only)
 
@@ -1122,11 +1119,18 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 /promote (reply to user)  
 → Promote user as auction admin
 
+/setbid <i>price Team Name</i>
+→ Force-set the current bid amount and bidding team.
+→ Used when bids lag, skip increments, or need admin correction.
+
 /start_auction  
 → Start auction in group
 
 /end_auction  
 → End auction & save results
+
+/remove <i>TEAM NAME PLAYER NAME </i>
+→ Manually Remove Player From Team
 
 /pause  
 → Pause auction timer
@@ -1285,6 +1289,99 @@ async def last_auction_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text(msg, parse_mode="HTML")
 
+async def setbid_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+
+    if chat_id not in group_map:
+        return await update.message.reply_text("❌ No active auction.")
+
+    auc = auctions[group_map[chat_id]]
+
+    # Admin only
+    if update.effective_user.id not in auc["admins"]:
+        return await update.message.reply_text("❌ Admin only.")
+
+    if auc.get("ended"):
+        return await update.message.reply_text("❌ Auction already ended.")
+
+    if len(context.args) < 2:
+        return await update.message.reply_text(
+            "Usage:\n/setbid <price> <TeamName>\nExample:\n/setbid 75C MI"
+        )
+
+    price_str = context.args[0]
+    team_name = " ".join(context.args[1:])
+
+    price = parse_price(price_str)
+    if price <= 0:
+        return await update.message.reply_text("❌ Invalid price.")
+
+    code, team = get_team_by_name(auc, team_name)
+    if not team:
+        return await update.message.reply_text("❌ Team not found.")
+
+    if team["purse"] < price:
+        return await update.message.reply_text(
+            f"❌ {team['name']} has insufficient purse."
+        )
+
+    # 🔒 Cancel existing timer
+    if auc.get("timer_task"):
+        auc["timer_task"].cancel()
+
+    # ✅ Set bid (single source of truth)
+    auc["current_bid"] = {
+        "amount": price,
+        "holder": team["owner"],
+        "holder_team": team["name"]
+    }
+
+    auc["skip_voters"] = set()
+
+    # ⏱ Restart timer
+    auc["timer_task"] = asyncio.create_task(
+        auction_timer(context, chat_id)
+    )
+
+    # 🖼 Update caption
+    p = auc["players"][auc["current_index"]]
+    next_inc = get_increment(price)
+
+    kb = [
+        [InlineKeyboardButton(
+            f"BID {format_price(price + next_inc)}",
+            callback_data="BID"
+        )],
+        [InlineKeyboardButton("SKIP", callback_data="SKIP")]
+    ]
+
+    auc["last_kb"] = InlineKeyboardMarkup(kb)
+
+    caption = (
+        f"💎 <strong>{p['Name']}</strong>\n"
+        f"🔨 <strong>Current:</strong> {format_price(price)} "
+        f"({team['name']})\n"
+        f"⏳ <strong>Reset 30s</strong>\n\n"
+        f"⚠️ <i>Bid set by Admin</i>"
+    )
+
+    try:
+        await context.bot.edit_message_caption(
+            chat_id,
+            auc["msg_id"],
+            caption=caption,
+            reply_markup=auc["last_kb"],
+            parse_mode="HTML"
+        )
+    except:
+        pass
+
+    await update.message.reply_text(
+        f"✅ Bid set to {format_price(price)} for {team['name']}.",
+        parse_mode="HTML"
+    )
+
+
 async def remove_player_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
 
@@ -1388,6 +1485,7 @@ if __name__ == '__main__':
     
     bot_app.add_handler(setup)
     bot_app.add_handler(CommandHandler("help", help_cmd))
+    bot_app.add_handler(CommandHandler("setbid", setbid_cmd))
     bot_app.add_handler(CommandHandler("init", init_group))
     bot_app.add_handler(CommandHandler("promote", promote_admin))
     bot_app.add_handler(CommandHandler("createteam", create_team))
