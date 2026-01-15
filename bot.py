@@ -165,6 +165,7 @@ async def finish_setup(update: Update, context: ContextTypes.DEFAULT_TYPE):
         room_id = generate_code(6)
         
         auctions[room_id] = {
+            "bid_lock": False,
             "room_id": room_id,
             "admins": context.user_data['setup']['admins'],
             "name": context.user_data['setup']['name'],
@@ -182,6 +183,7 @@ async def finish_setup(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "rtm_data": {},    # Stores temp RTM data
             "timer_task": None,
             "last_kb": None
+
         }
         
         admin_map[user_id] = room_id
@@ -678,7 +680,8 @@ async def bid_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if chat_id not in group_map: return await query.answer("Expired")
     auc = auctions[group_map[chat_id]]
-    
+    if auc.get("ended"):
+        return await query.answer("❌ Auction ended", show_alert=True)
     # --- RTM FLOW LOGIC ---
     if data == "CONFIRM_END":
         if user_id not in auc["admins"]:
@@ -910,38 +913,85 @@ async def bid_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await handle_result(context, chat_id, sold=False)
         else: await query.answer(f"Skip: {len(auc['skip_voters'])}/{active}")
         return
-
+    
     if data == "BID":
-        my_team = None
-        for t in auc['teams'].values():
-            if t['owner'] == user_id or t['sec_owner'] == user_id: my_team = t; break
-            
-        if not my_team: return await query.answer("No Team")
-        if auc['current_bid']['holder'] == user_id: return await query.answer("Wait!", show_alert=True)
-        
-        curr = auc['current_bid']['amount']
-        if auc['current_bid']['holder'] is None:
-            new_amt = curr
-        else:
-            new_amt = curr + get_increment(curr)
+        # 🔒 BID LOCK
+        if auc.get("bid_lock"):
+            return await query.answer("⏳ Processing bid...", show_alert=False)
 
-        
-        if my_team['purse'] < new_amt: return await query.answer("Low Funds!", show_alert=True)
-        
-        auc['current_bid'] = {"amount": new_amt, "holder": user_id, "holder_team": my_team['name']}
-        auc['skip_voters'] = set()
-        await query.answer(f"Bid {format_price(new_amt)}")
-        
-        if auc.get('timer_task'): auc['timer_task'].cancel()
-        auc['timer_task'] = asyncio.create_task(auction_timer(context, chat_id))
-        
-        p = auc['players'][auc['current_index']]
-        kb = [[InlineKeyboardButton(f"BID {format_price(new_amt + get_increment(new_amt))}", callback_data="BID")], [InlineKeyboardButton("SKIP", callback_data="SKIP")]]
-        cap = f"💎 <strong>{p['Name']}</strong>\n🔨 <strong>Current:</strong> {format_price(new_amt)} ({my_team['name']})\n⏳ <strong>Reset 30s</strong>"
-        
-        auc['last_kb'] = InlineKeyboardMarkup(kb)
-        try: await context.bot.edit_message_caption(chat_id, auc["msg_id"], caption=cap, reply_markup=auc['last_kb'], parse_mode='HTML')
-        except: pass
+        auc["bid_lock"] = True  # LOCK START
+
+        try:
+            my_team = None
+            for t in auc['teams'].values():
+                if t['owner'] == user_id or t['sec_owner'] == user_id:
+                    my_team = t
+                    break
+
+            if not my_team:
+                return await query.answer("No Team")
+
+            if auc['current_bid']['holder'] == user_id:
+                return await query.answer("Wait!", show_alert=True)
+
+            curr = auc['current_bid']['amount']
+            increment = get_increment(curr)
+            new_amt = curr + increment
+
+            if my_team['purse'] < new_amt:
+                return await query.answer("Low Funds!", show_alert=True)
+
+            # ✅ SINGLE SOURCE OF TRUTH
+            auc['current_bid'] = {
+                "amount": new_amt,
+                "holder": user_id,
+                "holder_team": my_team['name']
+            }
+
+            auc['skip_voters'] = set()
+
+            await query.answer(f"Bid {format_price(new_amt)}")
+
+            # ⏱️ RESET TIMER SAFELY
+            if auc.get('timer_task'):
+                auc['timer_task'].cancel()
+            auc['timer_task'] = asyncio.create_task(
+                auction_timer(context, chat_id)
+            )
+
+            p = auc['players'][auc['current_index']]
+            next_inc = get_increment(new_amt)
+
+            kb = [
+                [InlineKeyboardButton(
+                    f"BID {format_price(new_amt + next_inc)}",
+                    callback_data="BID"
+                )],
+                [InlineKeyboardButton("SKIP", callback_data="SKIP")]
+            ]
+
+            auc['last_kb'] = InlineKeyboardMarkup(kb)
+
+            cap = (
+                f"💎 <strong>{p['Name']}</strong>\n"
+                f"🔨 <strong>Current:</strong> {format_price(new_amt)} "
+                f"({my_team['name']})\n"
+                f"⏳ <strong>Reset 30s</strong>"
+            )
+
+            await context.bot.edit_message_caption(
+                chat_id,
+                auc["msg_id"],
+                caption=cap,
+                reply_markup=auc['last_kb'],
+                parse_mode='HTML'
+            )
+
+        finally:
+            auc["bid_lock"] = False  # 🔓 LOCK RELEASE
+
+        return
+
 
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -989,45 +1039,33 @@ async def end_auction_btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("🛑 <strong>Are you sure you want to end?</strong>", reply_markup=InlineKeyboardMarkup(kb), parse_mode='HTML')
 
 async def end_auction_logic(context, chat_id):
-    if chat_id not in group_map:
-        return
-
     auc = auctions[group_map[chat_id]]
 
-    final_snapshot = {
-        "name": auc["name"],
-        "room_id": auc["room_id"],
-        "teams": auc["teams"]
-    }
+    # 🔒 MARK AS ENDED
+    auc["ended"] = True
+    auc["is_active"] = False
 
-    await save_last_auction(final_snapshot)
+    # ⏱️ STOP TIMER
+    if auc.get("timer_task"):
+        auc["timer_task"].cancel()
 
-    report = f"🏆 <strong>{auc['name']} RESULTS</strong> 🏆\n\n"
-    for t in auc['teams'].values():
-        report += f"🛡 <strong>{t['name']}</strong>\n💰 Rem: {format_price(t['purse'])}\n"
-
-    for admin_id in auc['admins']:
-        try:
-            await context.bot.send_message(admin_id, report, parse_mode='HTML')
-        except:
-            pass
-        if admin_id in admin_map:
-            del admin_map[admin_id]
+    # 💾 SAVE DATA
+    import copy
+    final_snapshot = copy.deepcopy(auc)
+    save_last_auction(final_snapshot)
 
     await context.bot.send_message(
         chat_id,
-        "🛑 Auction Ended. Data Cleared.",
-        parse_mode='HTML'
+        "🛑 <b>Auction Ended.</b>\nAdmins can review results.",
+        parse_mode="HTML"
     )
 
-    # ✅ CRITICAL: delay cleanup to avoid callback race
-    await asyncio.sleep(1)
+    # 🧹 CLEAN MEMORY (AFTER MESSAGE)
+    for admin_id in auc["admins"]:
+        admin_map.pop(admin_id, None)
 
-    if auc['connected_group'] in group_map:
-        del group_map[auc['connected_group']]
-
-    if auc['room_id'] in auctions:
-        del auctions[auc['room_id']]
+    group_map.pop(chat_id, None)
+    auctions.pop(auc["room_id"], None)
 
 async def pause_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -1244,6 +1282,86 @@ async def last_auction_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text(msg, parse_mode="HTML")
 
+async def remove_player_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+
+    # Must be group auction
+    if chat_id not in group_map:
+        return await update.message.reply_text("❌ No active auction.")
+
+    auc = auctions[group_map[chat_id]]
+
+    # Admin only
+    if update.effective_user.id not in auc["admins"]:
+        return await update.message.reply_text("❌ Admin only.")
+
+    if len(context.args) < 2:
+        return await update.message.reply_text(
+            "Usage:\n/remove TeamName Player Name"
+        )
+
+    team_name = context.args[0]
+    player_name = " ".join(context.args[1:])
+
+    # 🔍 Find team
+    team = None
+    for t in auc["teams"].values():
+        if t["name"].lower() == team_name.lower():
+            team = t
+            break
+
+    if not team:
+        return await update.message.reply_text("❌ Team not found.")
+
+    # 🔍 Find player in team squad
+    removed_player = None
+    for p in team["squad"]:
+        if p["name"].lower() == player_name.lower():
+            removed_player = p
+            break
+
+    if not removed_player:
+        return await update.message.reply_text(
+            f"❌ Player not found in {team['name']} squad."
+        )
+
+    price = removed_player["price"]
+
+    # 💰 REFUND PURSE
+    team["purse"] += price
+
+    # 🔁 RTM ROLLBACK (if used)
+    if removed_player.get("rtm"):
+        team["rtms_used"] -= 1
+        if team["rtms_used"] < 0:
+            team["rtms_used"] = 0
+
+    # ❌ Remove from team squad
+    team["squad"].remove(removed_player)
+
+    # 🔄 RESET PLAYER IN AUCTION POOL
+    new_player = {
+        "Name": removed_player["name"],
+        "Role": "Player",
+        "Country": "Unknown",
+        "BasePrice": price,
+        "Status": "Upcoming",
+        "SoldPrice": 0,
+        "SoldTo": "None",
+        "rtm_flag": False
+    }
+
+    # 🎯 INSERT AS NEXT PLAYER
+    insert_at = auc["current_index"] + 1
+    auc["players"].insert(insert_at, new_player)
+
+    await update.message.reply_text(
+        f"♻️ <b>{removed_player['name']}</b> removed from "
+        f"<b>{team['name']}</b>\n\n"
+        f"💰 Refunded: {format_price(price)}\n"
+        f"🔁 Player added back to auction (NEXT)",
+        parse_mode="HTML"
+    )
 # --- SERVER ---
 app = Flask(__name__)
 @app.route('/')
@@ -1271,6 +1389,7 @@ if __name__ == '__main__':
     bot_app.add_handler(CommandHandler("promote", promote_admin))
     bot_app.add_handler(CommandHandler("createteam", create_team))
     bot_app.add_handler(CommandHandler("secondowner", second_owner_cmd))
+    bot_app.add_handler(CommandHandler("remove", remove_player_cmd))
     bot_app.add_handler(CommandHandler("register", register))
     bot_app.add_handler(CommandHandler("start_auction", start_auction))
     bot_app.add_handler(CommandHandler("end_auction", end_auction_btn))
