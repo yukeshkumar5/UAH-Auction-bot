@@ -16,7 +16,7 @@ from telegram.ext import (
 )
 
 # --- CONFIGURATION ---
-TOKEN = os.getenv("BOT_TOKEN")
+TOKEN = "8555822248:AAE76zDM4g-e_Ti3Zwg3k4TTEico-Ewyas0"
 
 # Enable logging 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO) 
@@ -680,6 +680,16 @@ async def bid_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     auc = auctions[group_map[chat_id]]
     
     # --- RTM FLOW LOGIC ---
+    if data == "CONFIRM_END":
+        if user_id not in auc["admins"]: return await query.answer("Admin Only")
+        await end_auction_logic(context, chat_id)
+        await query.message.delete()
+        return
+        
+    if data == "CANCEL_END":
+        if user_id not in auc["admins"]: return await query.answer("Admin Only")
+        await query.message.delete()
+        return
     
     if data == "NO_HIKE":
         # Winner chose no hike -> RTM Team takes player at current price
@@ -791,6 +801,7 @@ async def bid_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.delete()
         return
 
+    
     if data == "RTM_QUIT":
         rtm_code = auc['rtm_data']['rtm_team_code']
         rtm_t = auc['teams'][rtm_code]
@@ -824,16 +835,6 @@ async def bid_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # --- END AUCTION CONFIRMATION ---
-    if data == "CONFIRM_END":
-        if user_id not in auc["admins"]: return await query.answer("Admin Only")
-        await end_auction_logic(context, chat_id)
-        await query.message.delete()
-        return
-        
-    if data == "CANCEL_END":
-        if user_id not in auc["admins"]: return await query.answer("Admin Only")
-        await query.message.delete()
-        return
 
     # --- NORMAL FLOW ---
     if data == "RANDOM":
