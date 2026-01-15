@@ -16,7 +16,7 @@ from telegram.ext import (
 )
 
 # --- CONFIGURATION ---
-TOKEN = "8555822248:AAE76zDM4g-e_Ti3Zwg3k4TTEico-Ewyas0"
+TOKEN = "8555822248:AAG8qS1i18TeKicCzgO_InJ4TGBw3UR2vh0"
 # Enable logging 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO) 
 logger = logging.getLogger(__name__)
@@ -671,6 +671,7 @@ async def manual_rtm_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 async def bid_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    print("CALLBACK RECEIVED:", query.data)
     data = query.data
     chat_id = update.effective_chat.id
     user_id = query.from_user.id
