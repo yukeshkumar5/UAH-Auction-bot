@@ -681,10 +681,22 @@ async def bid_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # --- RTM FLOW LOGIC ---
     if data == "CONFIRM_END":
-        if user_id not in auc["admins"]: return await query.answer("Admin Only")
+        if user_id not in auc["admins"]:
+            return await query.answer("Admin Only", show_alert=True)
+
+        # ✅ Acknowledge callback IMMEDIATELY
+        await query.answer("Ending auction...")
+
+        # ✅ Disable the buttons first
+        try:
+            await query.edit_message_reply_markup(reply_markup=None)
+        except:
+            pass
+
+        # ✅ Then end auction
         await end_auction_logic(context, chat_id)
-        await query.message.delete()
         return
+
         
     if data == "CANCEL_END":
         if user_id not in auc["admins"]: return await query.answer("Admin Only")
@@ -977,8 +989,11 @@ async def end_auction_btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("🛑 <strong>Are you sure you want to end?</strong>", reply_markup=InlineKeyboardMarkup(kb), parse_mode='HTML')
 
 async def end_auction_logic(context, chat_id):
+    if chat_id not in group_map:
+        return
+
     auc = auctions[group_map[chat_id]]
-    
+
     final_snapshot = {
         "name": auc["name"],
         "room_id": auc["room_id"],
@@ -987,21 +1002,32 @@ async def end_auction_logic(context, chat_id):
 
     await save_last_auction(final_snapshot)
 
-
     report = f"🏆 <strong>{auc['name']} RESULTS</strong> 🏆\n\n"
     for t in auc['teams'].values():
         report += f"🛡 <strong>{t['name']}</strong>\n💰 Rem: {format_price(t['purse'])}\n"
-    
+
     for admin_id in auc['admins']:
-        try: await context.bot.send_message(admin_id, report, parse_mode='HTML')
-        except: pass
-        if admin_id in admin_map: del admin_map[admin_id] 
-    
-    
-    await context.bot.send_message(chat_id, "🛑 Auction Ended. Data Cleared.", parse_mode='HTML')
-    # CLEANUP
-    if auc['connected_group'] in group_map: del group_map[auc['connected_group']]
-    if auc['room_id'] in auctions: del auctions[auc['room_id']]
+        try:
+            await context.bot.send_message(admin_id, report, parse_mode='HTML')
+        except:
+            pass
+        if admin_id in admin_map:
+            del admin_map[admin_id]
+
+    await context.bot.send_message(
+        chat_id,
+        "🛑 Auction Ended. Data Cleared.",
+        parse_mode='HTML'
+    )
+
+    # ✅ CRITICAL: delay cleanup to avoid callback race
+    await asyncio.sleep(1)
+
+    if auc['connected_group'] in group_map:
+        del group_map[auc['connected_group']]
+
+    if auc['room_id'] in auctions:
+        del auctions[auc['room_id']]
 
 async def pause_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
