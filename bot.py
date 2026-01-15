@@ -1107,6 +1107,9 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 /rtmedit <i>TEAM_CODE COUNT</i>  
 → Manually edit remaining RTMs for a team
 
+/remove <i>TEAM NAME PLAYER NAME </i>
+→ Manually Remove Player From Team
+
 /summary  
 → Full auction report (DM only)
 
@@ -1149,7 +1152,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 /team <i>Team Name</i>  
 → View team squad & balance
 
-/stats  
+/stats or /Team
 → View all teams summary
 
 /check <i>Player Name</i>  
