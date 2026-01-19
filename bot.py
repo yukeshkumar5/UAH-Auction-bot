@@ -1540,51 +1540,19 @@ def run_web_server(): app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 80
 
 async def post_init(application):
     await set_private_commands(application)
-
-
-    bot_app.add_handler(setup)
-    bot_app.add_handler(CommandHandler("help", help_cmd))
-    bot_app.add_handler(CommandHandler("unlink", unlink_group_cmd))
-    bot_app.add_handler(CommandHandler("setbid", setbid_cmd))
-    bot_app.add_handler(CommandHandler("init", init_group))
-    bot_app.add_handler(CommandHandler("promote", promote_admin))
-    bot_app.add_handler(CommandHandler("createteam", create_team))
-    bot_app.add_handler(CommandHandler("secondowner", second_owner_cmd))
-    bot_app.add_handler(CommandHandler("remove", remove_player_cmd))
-    bot_app.add_handler(CommandHandler("register", register))
-    bot_app.add_handler(CommandHandler("start_auction", start_auction))
-    bot_app.add_handler(CommandHandler("end_auction", end_auction_btn))
-    bot_app.add_handler(CommandHandler(["team", "teams", "stats"], team_stats_logic))
-    bot_app.add_handler(CommandHandler("retain", retain_player))
-    bot_app.add_handler(CommandHandler("transfer", transfer_team))
-    bot_app.add_handler(CommandHandler("check", check_player))
-    bot_app.add_handler(CommandHandler("upcoming", upcoming))
-    bot_app.add_handler(CommandHandler("completed", completed_list))
-    bot_app.add_handler(CommandHandler("pause", pause_cmd))
-    bot_app.add_handler(CommandHandler("resume", resume_cmd))
-    bot_app.add_handler(CommandHandler("now", fast_track_player))
-    bot_app.add_handler(CommandHandler("summary", full_summary_cmd))
-    bot_app.add_handler(CommandHandler("rtm", manual_rtm_command))
-    bot_app.add_handler(CommandHandler("rtmedit", edit_rtm_count))
-    bot_app.add_handler(CommandHandler("lastauction", last_auction_cmd))
-
-    bot_app.add_handler(CallbackQueryHandler(bid_handler))
-    bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
-
-    print("Ultra Advanced Bot is Live...")
-    await bot_app.run_polling()
-
-
 if __name__ == "__main__":
+    # Start Flask keep-alive server
     Thread(target=run_web_server).start()
 
+    # Build Telegram application
     bot_app = (
         ApplicationBuilder()
         .token(TOKEN)
-        .post_init(post_init)   # 👈 THIS replaces async main
+        .post_init(post_init)  # sets / commands safely
         .build()
     )
 
+    # ---- Conversation Handler ----
     setup = ConversationHandler(
         entry_points=[CommandHandler('start', start_setup)],
         states={
@@ -1596,7 +1564,9 @@ if __name__ == "__main__":
         fallbacks=[CommandHandler('cancel', cancel_setup)]
     )
 
+    # ---- HANDLERS (ADD ONLY HERE) ----
     bot_app.add_handler(setup)
+
     bot_app.add_handler(CommandHandler("help", help_cmd))
     bot_app.add_handler(CommandHandler("unlink", unlink_group_cmd))
     bot_app.add_handler(CommandHandler("setbid", setbid_cmd))
