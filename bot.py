@@ -5,7 +5,7 @@ import random
 import string
 import os
 import re
-from telegram import BotCommand, BotCommandScopePrivateChat
+from telegram import BotCommand, BotCommandScopeAllPrivateChats
 from threading import Thread
 from flask import Flask
 from duckduckgo_search import DDGS
@@ -1449,7 +1449,7 @@ async def set_private_commands(app):
 
     await app.bot.set_my_commands(
         commands,
-        scope=BotCommandScopePrivateChat()
+        scope=BotCommandScopeAllPrivateChats()
     )
 
 async def remove_player_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
