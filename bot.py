@@ -939,7 +939,13 @@ async def bid_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             curr = auc['current_bid']['amount']
             increment = get_increment(curr)
-            new_amt = curr + increment
+            if auc['current_bid']['holder'] is None:
+                # ✅ FIRST BID = BASE PRICE
+                new_amt = curr
+            else:
+                # ✅ NEXT BIDS = INCREMENT
+                new_amt = curr + get_increment(curr)
+
 
             if my_team['purse'] < new_amt:
                 return await query.answer("Low Funds!", show_alert=True)
