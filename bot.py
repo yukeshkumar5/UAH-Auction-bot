@@ -611,54 +611,68 @@ async def handle_result(context, chat_id, sold):
 # --- MANUAL RTM TRIGGER COMMAND ---
 async def manual_rtm_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
+
     if chat_id not in group_map:
         return
 
     auc = auctions[group_map[chat_id]]
 
-    if update.effective_user.id not in auc['admins']:
+    # Admin only
+    if update.effective_user.id not in auc["admins"]:
         return
 
-    if not update.message.reply_to_message:
-        return await update.message.reply_text("Reply to the SOLD message!")
-
-    # 🔹 CASE 1: /rtm → SHOW TEAM LIST
+    # ---------- CASE 1: /rtm (INFO MODE) ----------
     if not context.args:
-        msg = "✋ <b>RTM AVAILABLE TEAMS</b>\n\n"
+        msg = "✋ <b>RTM STATUS</b>\n\n"
         found = False
 
-        for t in auc['teams'].values():
-            left = auc['rtm_limit'] - t['rtms_used']
+        for t in auc["teams"].values():
+            left = auc["rtm_limit"] - t["rtms_used"]
+
             if left > 0:
-                msg += f"🛡 <b>{t['name']}</b> — RTM Left: {left}\n"
-                found = True
+                msg += f"🟢 <b>{t['name']}</b> — {left} RTM left\n"
+            else:
+                msg += f"🔴 <b>{t['name']}</b> — 0 RTM ❌\n"
+
+            found = True
 
         if not found:
-            msg += "❌ No teams have RTMs left."
+            msg += "❌ No teams available."
 
-        msg += "\n\nReply to SOLD message with:\n<code>/rtm TeamName</code>"
+        msg += "\nReply to SOLD message with:\n<code>/rtm TeamName</code>"
         return await update.message.reply_text(msg, parse_mode="HTML")
 
-    # 🔹 CASE 2: /rtm TeamName → TRIGGER RTM
-    team_name = " ".join(context.args)
-    rtm_team_code, rtm_team = get_team_by_name(auc, team_name)
+    # ---------- CASE 2: /rtm TeamName (ACTION MODE) ----------
+    if not update.message.reply_to_message:
+        return await update.message.reply_text(
+            "❌ Reply to the SOLD message to use RTM."
+        )
+
+    team_name = " ".join(context.args).strip().lower()
+
+    rtm_team = None
+    for t in auc["teams"].values():
+        if t["name"].lower() == team_name:
+            rtm_team = t
+            break
 
     if not rtm_team:
         return await update.message.reply_text("❌ Team not found.")
 
-    if rtm_team['rtms_used'] >= auc['rtm_limit']:
+    rtm_left = auc["rtm_limit"] - rtm_team["rtms_used"]
+
+    # 🔥 HARD BLOCK
+    if rtm_left <= 0:
         return await update.message.reply_text(
-            f"🚫 {rtm_team['name']} has no RTMs left!"
+            f"🚫 <b>{rtm_team['name']}</b> has <b>0 RTM left</b> ❌",
+            parse_mode="HTML"
         )
 
-    # ✅ VALID RTM
-    auc["rtm_state"] = "RTM_WAITING_HIKE_PRICE"
+    # ---------- VALID RTM ----------
+    auc["rtm_state"] = "RTM_WAITING_HIKE"
     auc["rtm_data"] = {
-        "rtm_team_code": rtm_team_code,
-        "rtm_team_name": rtm_team['name']
+        "team_name": rtm_team["name"]
     }
-
-    sold_team_name = auc['players'][auc['current_index']]['SoldTo']
 
     kb = [[
         InlineKeyboardButton("HIKE 📈", callback_data="DO_HIKE"),
@@ -666,8 +680,8 @@ async def manual_rtm_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     ]]
 
     await update.message.reply_text(
-        f"✋ <b>RTM TRIGGERED by {rtm_team['name']}!</b>\n\n"
-        f"👑 <b>{sold_team_name}</b>, do you want to HIKE the price?",
+        f"✋ <b>RTM CALLED BY {rtm_team['name']}</b>\n\n"
+        "Winning team: choose an option 👇",
         reply_markup=InlineKeyboardMarkup(kb),
         parse_mode="HTML"
     )
