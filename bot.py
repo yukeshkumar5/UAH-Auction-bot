@@ -5,6 +5,7 @@ import random
 import string
 import os
 import re
+from telegram import BotCommand, BotCommandScopePrivateChat
 from threading import Thread
 from flask import Flask
 from duckduckgo_search import DDGS
@@ -16,7 +17,7 @@ from telegram.ext import (
 )
 
 # --- CONFIGURATION ---
-TOKEN = "8555822248:AAG8qS1i18TeKicCzgO_InJ4TGBw3UR2vh0"
+TOKEN = os.getenv("BOT_TOKEN")
 # Enable logging 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO) 
 logger = logging.getLogger(__name__)
@@ -1433,6 +1434,24 @@ async def unlink_group_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="HTML"
     )
 
+async def set_private_commands(app):
+    commands = [
+        BotCommand("start", "Start auction setup (DM only)"),
+        BotCommand("help", "Show help & command usage"),
+        BotCommand("createteam", "Create a new team"),
+        BotCommand("secondowner", "Generate second owner code"),
+        BotCommand("transfer", "Transfer a team code"),
+        BotCommand("retain", "Retain a player before auction"),
+        BotCommand("rtmedit", "Edit remaining RTMs for a team"),
+        BotCommand("summary", "View full auction summary"),
+        BotCommand("lastauction", "View last auction result"),
+    ]
+
+    await app.bot.set_my_commands(
+        commands,
+        scope=BotCommandScopePrivateChat()
+    )
+
 async def remove_player_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
 
@@ -1519,10 +1538,14 @@ app = Flask(__name__)
 def index(): return "Bot Active"
 def run_web_server(): app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
 
-if __name__ == '__main__':
+async def main():
     Thread(target=run_web_server).start()
+
     bot_app = ApplicationBuilder().token(TOKEN).build()
-    
+
+    # 🔹 REGISTER "/" COMMAND MENU (DM)
+    await set_private_commands(bot_app)
+
     setup = ConversationHandler(
         entry_points=[CommandHandler('start', start_setup)],
         states={
@@ -1533,7 +1556,7 @@ if __name__ == '__main__':
         },
         fallbacks=[CommandHandler('cancel', cancel_setup)]
     )
-    
+
     bot_app.add_handler(setup)
     bot_app.add_handler(CommandHandler("help", help_cmd))
     bot_app.add_handler(CommandHandler("unlink", unlink_group_cmd))
@@ -1560,9 +1583,13 @@ if __name__ == '__main__':
     bot_app.add_handler(CommandHandler("rtmedit", edit_rtm_count))
     bot_app.add_handler(CommandHandler("lastauction", last_auction_cmd))
 
-    
     bot_app.add_handler(CallbackQueryHandler(bid_handler))
     bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
 
     print("Ultra Advanced Bot is Live...")
-    bot_app.run_polling()
+    await bot_app.run_polling()
+
+
+if __name__ == "__main__":
+    import asyncio
+    asyncio.run(main())

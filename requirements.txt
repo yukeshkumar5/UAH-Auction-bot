@@ -4,3 +4,5 @@ pandas
 flask
 duckduckgo-search
 openpyxl
+supabase
+

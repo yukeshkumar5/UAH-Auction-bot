@@ -1,33 +1,26 @@
-import json
-import os
+from supabase import create_client
 from datetime import datetime
+import os
 
-FILE = "last_auction.json"
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
+
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 def save_last_auction(auc):
-    data = {
-        "name": auc["name"],
-        "room_id": auc["room_id"],
+    supabase.table("auctions").insert({
+        "auction_name": auc["name"],
         "ended_at": datetime.utcnow().isoformat(),
-        "teams": {}
-    }
-
-    for code, t in auc["teams"].items():
-        data["teams"][code] = {
-            "name": t["name"],
-            "purse": t["purse"],
-            "squad": t["squad"]
-        }
-
-    with open(FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
-
+        "data": auc
+    }).execute()
 
 def load_last_auction():
-    if not os.path.exists(FILE):
-        return None
-    try:
-        with open(FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except json.JSONDecodeError:
-        return None
+    res = supabase.table("auctions") \
+        .select("*") \
+        .order("ended_at", desc=True) \
+        .limit(1) \
+        .execute()
+
+    if res.data:
+        return res.data[0]["data"]
+    return None
