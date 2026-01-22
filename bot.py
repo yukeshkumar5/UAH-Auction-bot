@@ -510,7 +510,18 @@ async def show_next_player(context, chat_id):
         auc['last_kb'] = InlineKeyboardMarkup(kb)
         
         if img_url:
-            msg = await context.bot.send_photo(chat_id, photo=img_url, caption=caption, reply_markup=auc['last_kb'], parse_mode='HTML')
+            await context.bot.send_photo(
+                chat_id,
+                photo=img_url,
+                caption=caption,
+                parse_mode='HTML'
+            )
+
+            msg = await context.bot.send_message(
+                chat_id,
+                "Waiting for bids...",
+                reply_markup=auc['last_kb']
+            )
         else:
             msg = await context.bot.send_message(chat_id, text=caption, reply_markup=auc['last_kb'], parse_mode='HTML')
             
@@ -547,9 +558,23 @@ async def update_caption(context, chat_id, text):
     auc = auctions[group_map[chat_id]]
     p = auc['players'][auc['current_index']]
     b = auc['current_bid']
-    info = f"🔨 <strong>Current:</strong> {format_price(b['amount'])} ({b['holder_team']})" if b['holder'] else f"💰 <strong>Base:</strong> {format_price(p['BasePrice'])}"
-    try: await context.bot.edit_message_caption(chat_id, auc["msg_id"], caption=f"💎 <strong>{p['Name']}</strong>\n{info}\n{text}", reply_markup=auc.get('last_kb'), parse_mode='HTML')
-    except: pass
+
+    info = (
+        f"🔨 <strong>Current:</strong> {format_price(b['amount'])} ({b['holder_team']})"
+        if b['holder']
+        else f"💰 <strong>Base:</strong> {format_price(p['BasePrice'])}"
+    )
+
+    try:
+        await context.bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=auc["msg_id"],
+            text=f"💎 <strong>{p['Name']}</strong>\n{info}\n{text}",
+            reply_markup=auc.get('last_kb'),
+            parse_mode='HTML'
+        )
+    except:
+        pass
 
 async def dramatic_close(context, chat_id, sold: bool):
     auc = auctions[group_map[chat_id]]
@@ -580,7 +605,7 @@ async def handle_result(context, chat_id, sold):
     if not sold:
         p['Status'] = 'Unsold'
         cap = f"❌ <strong>UNSOLD</strong>\n\n🏏 <strong>{p['Name']}</strong>\n💰 Base: {format_price(p['BasePrice'])}"
-        try: await context.bot.edit_message_caption(chat_id, auc["msg_id"], caption=cap, reply_markup=InlineKeyboardMarkup(kb), parse_mode='HTML')
+        try: await context.message.text(chat_id, auc["msg_id"], caption=cap, reply_markup=InlineKeyboardMarkup(kb), parse_mode='HTML')
         except: pass
         return
 
@@ -605,11 +630,30 @@ async def handle_result(context, chat_id, sold):
         cap = f"🔴 <strong>SOLD TO {w_team['name']}</strong> 🔴\n\n👤 <strong>{p['Name']}</strong>\n💸 {format_price(amt)}\n💰 Bal: {format_price(w_team['purse'])}"
 
     try: 
-        await context.bot.edit_message_caption(chat_id, auc["msg_id"], caption=cap, reply_markup=InlineKeyboardMarkup(kb), parse_mode='HTML')
+        await context.bot.edit_message_text(
+            chat_id,
+            auc["msg_id"],
+            caption=cap,
+            reply_markup=InlineKeyboardMarkup(kb),
+            parse_mode='HTML'
+        )
     except: pass
 
 # --- MANUAL RTM TRIGGER COMMAND ---
+
 async def manual_rtm_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+
+    if chat_id not in group_map:
+        return
+
+    auc = auctions[group_map[chat_id]]
+
+    p = auc['players'][auc['current_index']]
+    if p.get("Status") != "Sold":
+        return await update.message.reply_text("❌ RTM can only be used on SOLD players.")
+
+
     chat_id = update.effective_chat.id
 
     if chat_id not in group_map:
@@ -669,7 +713,7 @@ async def manual_rtm_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
 
     # ---------- VALID RTM ----------
-    auc["rtm_state"] = "RTM_WAITING_HIKE"
+    auc["rtm_state"] = "RTM_WAITING_HIKE_PRICE"
     auc["rtm_data"] = {
         "team_name": rtm_team["name"]
     }
@@ -690,6 +734,18 @@ async def manual_rtm_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 async def bid_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    chat_id = update.effective_chat.id
+
+    if chat_id not in group_map:
+        return await query.answer("Expired")
+
+    auc = auctions[group_map[chat_id]]
+
+    if auc.get("ui_lock"):
+        return await query.answer("⏳ Updating...", show_alert=False)
+
+    auc["ui_lock"] = True
+
     print("CALLBACK RECEIVED:", query.data)
     data = query.data
     chat_id = update.effective_chat.id
@@ -813,7 +869,7 @@ async def bid_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
         try:
-            await context.bot.edit_message_caption(
+            await context.bot.edit_message_text(
                 chat_id=chat_id,
                 message_id=auc["msg_id"],
                 caption=cap,
@@ -1002,7 +1058,7 @@ async def bid_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"⏳ <strong>Reset 30s</strong>"
             )
 
-            await context.bot.edit_message_caption(
+            await context.bot.edit_message_text(
                 chat_id,
                 auc["msg_id"],
                 caption=cap,
@@ -1012,6 +1068,8 @@ async def bid_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         finally:
             auc["bid_lock"] = False  # 🔓 LOCK RELEASE
+            auc["ui_lock"] = False
+
 
         return
 
@@ -1398,7 +1456,7 @@ async def setbid_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     try:
-        await context.bot.edit_message_caption(
+        await context.bot.edit_message_text(
             chat_id,
             auc["msg_id"],
             caption=caption,
