@@ -509,23 +509,25 @@ async def show_next_player(context, chat_id):
         
         auc['last_kb'] = InlineKeyboardMarkup(kb)
         
-        if img_url:
-            await context.bot.send_photo(
-                chat_id,
-                photo=img_url,
-                caption=caption,
-                parse_mode='HTML'
-            )
+        # 1️⃣ Send PLAYER PHOTO (NEVER EDIT THIS MESSAGE AGAIN)
+        photo_msg = await context.bot.send_photo(
+            chat_id,
+            photo=img_url,
+            caption=caption,
+            parse_mode="HTML"
+        )
 
-            msg = await context.bot.send_message(
-                chat_id,
-                "Waiting for bids...",
-                reply_markup=auc['last_kb']
-            )
-        else:
-            msg = await context.bot.send_message(chat_id, text=caption, reply_markup=auc['last_kb'], parse_mode='HTML')
-            
-        auc["msg_id"] = msg.message_id
+        # 2️⃣ Send BID MESSAGE (ONLY THIS WILL BE EDITED)
+        bid_msg = await context.bot.send_message(
+            chat_id,
+            f"💰 Base Price: {format_price(base)}\n⏳ 30 Seconds",
+            reply_markup=auc["last_kb"],
+            parse_mode="HTML"
+        )
+
+        # 3️⃣ STORE BOTH MESSAGE IDS SEPARATELY
+        auc["photo_msg_id"] = photo_msg.message_id
+        auc["bid_msg_id"] = bid_msg.message_id
         auc['timer_task'] = asyncio.create_task(auction_timer(context, chat_id))
     except Exception as e:
         await context.bot.send_message(chat_id, f"⚠️ Error: {e}\nSkipping player...")
@@ -568,7 +570,7 @@ async def update_caption(context, chat_id, text):
     try:
         await context.bot.edit_message_text(
             chat_id=chat_id,
-            message_id=auc["msg_id"],
+            message_id=auc["bid_msg_id"],
             text=f"💎 <strong>{p['Name']}</strong>\n{info}\n{text}",
             reply_markup=auc.get('last_kb'),
             parse_mode='HTML'
@@ -605,7 +607,7 @@ async def handle_result(context, chat_id, sold):
     if not sold:
         p['Status'] = 'Unsold'
         cap = f"❌ <strong>UNSOLD</strong>\n\n🏏 <strong>{p['Name']}</strong>\n💰 Base: {format_price(p['BasePrice'])}"
-        try: await context.message.text(chat_id, auc["msg_id"], caption=cap, reply_markup=InlineKeyboardMarkup(kb), parse_mode='HTML')
+        try: await context.message.text(chat_id, auc["bid_msg_id"], caption=cap, reply_markup=InlineKeyboardMarkup(kb), parse_mode='HTML')
         except: pass
         return
 
@@ -631,12 +633,13 @@ async def handle_result(context, chat_id, sold):
 
     try: 
         await context.bot.edit_message_text(
-            chat_id,
-            auc["msg_id"],
-            caption=cap,
+            chat_id=chat_id,
+            message_id=auc["bid_msg_id"],
+            text=cap,
             reply_markup=InlineKeyboardMarkup(kb),
-            parse_mode='HTML'
+            parse_mode="HTML"
         )
+                
     except: pass
 
 # --- MANUAL RTM TRIGGER COMMAND ---
@@ -871,7 +874,7 @@ async def bid_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             await context.bot.edit_message_text(
                 chat_id=chat_id,
-                message_id=auc["msg_id"],
+                message_id=auc["bid_msg_id"],
                 caption=cap,
                 parse_mode="HTML"
             )
@@ -1060,7 +1063,7 @@ async def bid_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             await context.bot.edit_message_text(
                 chat_id,
-                auc["msg_id"],
+                auc["bid_msg_id"],
                 caption=cap,
                 reply_markup=auc['last_kb'],
                 parse_mode='HTML'
@@ -1458,7 +1461,7 @@ async def setbid_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await context.bot.edit_message_text(
             chat_id,
-            auc["msg_id"],
+            auc["bid_msg_id"],
             caption=caption,
             reply_markup=auc["last_kb"],
             parse_mode="HTML"
