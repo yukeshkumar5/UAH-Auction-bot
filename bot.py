@@ -940,15 +940,23 @@ async def bid_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "REBID":
         if user_id not in auc["admins"]: return await query.answer("Admin Only")
         if auc.get('timer_task'): auc['timer_task'].cancel()
-        
         p = auc['players'][auc['current_index']]
         if p.get('Status') == 'Sold':
             for t in auc['teams'].values():
                 if t['name'] == p['SoldTo']:
                     t['purse'] += p['SoldPrice']
-                    if p.get('rtm_flag'): t['rtms_used'] -= 1
+
+                    if p.get('rtm_flag'):
+                        t['rtms_used'] -= 1
+                        if t['rtms_used'] < 0:
+                            t['rtms_used'] = 0
+
                     t['squad'] = [x for x in t['squad'] if x['name'] != p['Name']]
+
+                    # ✅ LIVE UPDATE HERE
+                    await refresh_team_message(context, auc, t)
                     break
+
         
         auc["current_index"] -= 1
         await query.answer("Rebidding...")
