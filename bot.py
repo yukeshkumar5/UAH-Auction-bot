@@ -6,6 +6,8 @@ import string
 import os
 import re
 from telegram import BotCommand, BotCommandScopeAllPrivateChats
+from threading import Thread
+from flask import Flask
 from duckduckgo_search import DDGS
 from auction_store import save_last_auction
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -1749,27 +1751,24 @@ async def remove_player_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await refresh_team_message(context, auc, team)
 
+# --- SERVER ---
+app = Flask(__name__)
+@app.route('/')
+def index(): return "Bot Active"
+def run_web_server(): app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
+
 async def post_init(application):
     await set_private_commands(application)
-PORT = int(os.environ.get("PORT", 8080))
-WEBHOOK_PATH = "/webhook"
-WEBHOOK_URL = os.environ.get("WEBHOOK_URL") + WEBHOOK_PATH
-
 if __name__ == "__main__":
+    # Start Flask keep-alive server
+    Thread(target=run_web_server).start()
+
+    # Build Telegram application
     bot_app = (
         ApplicationBuilder()
         .token(TOKEN)
-        .post_init(post_init)
+        .post_init(post_init)  # sets / commands safely
         .build()
-    )
-
-    # add handlers here (you already did this correctly)
-
-    bot_app.run_webhook(
-        listen="0.0.0.0",
-        port=PORT,
-        url_path=WEBHOOK_PATH,
-        webhook_url=WEBHOOK_URL,
     )
 
     # ---- Conversation Handler ----
