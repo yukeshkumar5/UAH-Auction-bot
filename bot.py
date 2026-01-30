@@ -1595,51 +1595,28 @@ async def unlink_group_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
 
     if chat_id not in group_map:
-        return await update.message.reply_text("❌ No active auction linked.")
+        return await update.message.reply_text("❌ No auction linked.")
 
     auc = auctions[group_map[chat_id]]
 
-    # Admin only
+    # ✅ Admin only
     if update.effective_user.id not in auc["admins"]:
         return await update.message.reply_text("❌ Admin only.")
 
-    # 🚫 HARD BLOCK: AUCTION NOT ENDED
-    if not auc.get("ended"):
-        return await update.message.reply_text(
-            "🚫 <b>Cannot unlink now</b>\n\n"
-            "👉 End the auction first using:\n"
-            "<code>/end_auction</code>",
-            parse_mode="HTML"
-        )
-
-    # ⏱ Stop timer if running
+    # ✅ Stop timers (optional safety)
     if auc.get("timer_task"):
         auc["timer_task"].cancel()
 
-    # 💾 Save auction (safety)
-    try:
-        import copy
-        save_last_auction(copy.deepcopy(auc))
-    except:
-        pass
-
-    # 🧹 UNLINK
-    room_id = auc["room_id"]
-
-    for admin_id in auc["admins"]:
-        admin_map.pop(admin_id, None)
-
+    # ✅ Disconnect group ONLY (do NOT delete auction)
+    auc["connected_group"] = None
     group_map.pop(chat_id, None)
-    auctions.pop(room_id, None)
 
     await update.message.reply_text(
-        "🔌 <b>AUCTION UNLINKED</b>\n\n"
-        "✅ Auction already ended\n"
-        "📦 Data محفوظ safely\n"
-        "🆕 Group is now free for new auction",
+        "🔌 <b>GROUP UNLINKED</b>\n\n"
+        "Auction still active in DM.\n"
+        "You can reconnect using /init ROOM_ID",
         parse_mode="HTML"
     )
-
 async def set_private_commands(app):
     commands = [
         BotCommand("start", "Start auction setup (DM only)"),
