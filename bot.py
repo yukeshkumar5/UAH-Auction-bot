@@ -498,7 +498,15 @@ async def start_auction(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await update.message.reply_text("⚠️ Auction is already running!")
     
     auc['is_active'] = True
-    await update.message.reply_text("📢 <strong>AUCTION STARTING!</strong>", parse_mode='HTML')
+    WELCOME_IMG = "https://ik.imagekit.io/yog3jdkju/file_00000000fa0871fdaf44b0175b073bc6.png"  # replace with your image link
+
+    await context.bot.send_photo(
+        chat_id=chat_id,
+        photo=WELCOME_IMG,
+        caption="📢 <b>WELCOME TO THE AUCTION!</b>\n\n🔥 Let the bidding war begin!",
+        parse_mode="HTML"
+    )
+
     await asyncio.sleep(2)
     await show_next_player(context, chat_id)
 
@@ -740,30 +748,28 @@ async def bid_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     auc = auctions[group_map[chat_id]]
     if auc.get("ended"):
         return await query.answer("❌ Auction ended", show_alert=True)
-    # --- RTM FLOW LOGIC ---
-    # if data == "CONFIRM_END":
-    #     if user_id not in auc["admins"]:
-    #         return await query.answer("Admin Only", show_alert=True)
+    if data == "CONFIRM_END":
+        if user_id not in auc["admins"]:
+            return await query.answer("Admin Only", show_alert=True)
 
-    #     # ✅ Acknowledge callback IMMEDIATELY
-    #     await query.answer("Ending auction...")
+        await query.answer("Ending auction...")
 
-    #     # ✅ Disable the buttons first
-    #     try:
-    #         await query.edit_message_reply_markup(reply_markup=None)
-    #     except:
-    #         pass
+        # disable buttons
+        try:
+            await query.edit_message_reply_markup(reply_markup=None)
+        except:
+            pass
 
-    #     # ✅ Then end auction
-    #     await end_auction_logic(context, chat_id)
-    #     return
+        await end_auction_logic(context, chat_id)
+        return
 
-        
-    # if data == "CANCEL_END":
-    #     if user_id not in auc["admins"]: return await query.answer("Admin Only")
-    #     await query.message.delete()
-    #     return
-    
+    if data == "CANCEL_END":
+        if user_id not in auc["admins"]:
+            return await query.answer("Admin Only")
+
+        await query.message.delete()
+        return
+
     # if data == "NO_HIKE":
     #     # Winner chose no hike -> RTM Team takes player at current price
     #     # We need to verify user is the winner (SoldTo owner)
