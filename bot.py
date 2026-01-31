@@ -404,101 +404,83 @@ async def transfer_team(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"🔄 Transferred.\nNew Code: <code>{new_code}</code>", parse_mode='HTML')
 
 async def retain_player(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_chat.type != 'private':
+    if update.effective_chat.type != "private":
         return
+
     uid = update.effective_user.id
     if uid not in admin_map:
         return
 
     auc = auctions[admin_map[uid]]
 
+    text = " ".join(context.args)
+
+    if "-" not in text:
+        return await update.message.reply_text(
+            "Usage:\n/retain Team Name Player1 - Price1, Player2 - Price2",
+            parse_mode="HTML"
+        )
+
     try:
-        text = " ".join(context.args).strip()
+        team_part, players_part = text.split(" ", 1)
 
-        # 🔍 FIND TEAM BY NAME (LONGEST MATCH)
+        # ---- FIND TEAM BY NAME (not code) ----
         team = None
-        team_name = None
-
-        for t in auc['teams'].values():
-            if text.lower().startswith(t['name'].lower()):
+        for t in auc["teams"].values():
+            if text.lower().startswith(t["name"].lower()):
                 team = t
-                team_name = t['name']
+                players_part = text[len(t["name"]):].strip()
                 break
 
         if not team:
-            return await update.message.reply_text("❌ Team name not found.")
+            return await update.message.reply_text("❌ Team not found")
 
-        # ✂️ REMOVE TEAM NAME FROM TEXT
-        rest = text[len(team_name):].strip()
+        entries = [x.strip() for x in players_part.split(",")]
 
-        if not rest:
-            return await update.message.reply_text(
-                "❌ No players given.\nUsage:\n/retain Team Name Player - Price, Player - Price"
-            )
-
-        entries = [x.strip() for x in rest.split(",")]
-
-        retains = []
-        total_cost = 0
+        msg = f"🛡 <b>{team['name']} – Retentions</b>\n\n"
 
         for entry in entries:
             if "-" not in entry:
-                return await update.message.reply_text(
-                    f"❌ Invalid format: {entry}\nUse: Player Name - Price"
-                )
+                continue
 
-            p_name, price_str = entry.rsplit("-", 1)
-            p_name = p_name.strip()
+            name, price_str = entry.rsplit("-", 1)
+            name = name.strip()
             price = parse_price(price_str)
 
-            if price <= 0:
-                return await update.message.reply_text(f"❌ Invalid price for {p_name}")
+            if team["purse"] < price:
+                msg += f"❌ {name} – insufficient purse\n"
+                continue
 
-            retains.append((p_name, price))
-            total_cost += price
+            # 1️⃣ Deduct purse
+            team["purse"] -= price
 
-        # 💰 PURSE CHECK
-        if team['purse'] < total_cost:
-            return await update.message.reply_text(
-                f"❌ Not enough purse.\nRequired: {format_price(total_cost)}\nAvailable: {format_price(team['purse'])}"
-            )
-
-        msg = ""
-
-        for p_name, price in retains:
-            team['purse'] -= price
-            team['squad'].append({
-                "name": p_name,
+            # 2️⃣ Add to squad
+            team["squad"].append({
+                "name": name,
                 "price": price,
                 "type": "retained"
             })
 
-            target = clean_name(p_name)
-            before = len(auc['players'])
-
-            auc['players'] = [
-                p for p in auc['players']
-                if clean_name(p['Name']) != target
+            # 3️⃣ Remove from auction list IF EXISTS
+            before = len(auc["players"])
+            auc["players"] = [
+                p for p in auc["players"]
+                if clean_name(p["Name"]) != clean_name(name)
             ]
+            after = len(auc["players"])
 
-            msg += f"✅ <b>{p_name}</b> retained for {format_price(price)}\n"
-            if len(auc['players']) < before:
-                msg += "🗑 Removed from auction list\n"
+            if after < before:
+                msg += f"✅ {name} – {format_price(price)} (removed from auction)\n"
             else:
-                msg += "⚠️ Player not found in auction list\n"
-
-        # 🔄 LIVE UPDATE
-        await refresh_team_message(context, auc, team)
+                msg += f"✅ {name} – {format_price(price)} (not in auction list)\n"
 
         await update.message.reply_text(msg, parse_mode="HTML")
 
+        # 🔁 LIVE UPDATE
+        await refresh_team_message(context, auc, team)
+
     except Exception as e:
-        await update.message.reply_text(
-            "❌ Usage:\n"
-            "/retain Team Name Player - Price, Player - Price\n\n"
-            "Example:\n"
-            "/retain Chennai Super Kings MS Dhoni - 12C, Ruturaj Gaikwad - 13C"
-        )
+        await update.message.reply_text(f"❌ Error: {e}")
 
 async def edit_rtm_count(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.type != 'private': return
