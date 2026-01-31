@@ -659,7 +659,13 @@ async def update_team_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for t in auc['teams'].values():
         if t.get('live_msg_id') == replied_id:
             t['live_chat_id'] = chat_id
-            return await update.message.reply_text(f"✅ Live updates enabled for {t['name']}")
+
+            # 🔥 FORCE REFRESH HERE
+            await refresh_team_message(context, auc, t)
+
+            return await update.message.reply_text(
+                f"✅ Live updates enabled & refreshed for {t['name']}"
+            )
 
     await update.message.reply_text("❌ This is not a team message.")
 
@@ -1681,6 +1687,7 @@ async def set_private_commands(app):
 
 async def refresh_team_message(context, auc, team):
     if not team.get("live_msg_id"):
+        print("NO LIVE MESSAGE LINKED")
         return
 
     text = build_team_text(auc, team)
@@ -1692,8 +1699,9 @@ async def refresh_team_message(context, auc, team):
             text=text,
             parse_mode="HTML"
         )
-    except:
-        pass
+        print("LIVE UPDATED OK")
+    except Exception as e:
+        print("LIVE UPDATE ERROR:", e)
 
 
 async def remove_player_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
