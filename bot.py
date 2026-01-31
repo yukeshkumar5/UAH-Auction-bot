@@ -367,6 +367,7 @@ async def register(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if auc['teams'][input_code]['owner']: return await update.message.reply_text("⚠️ Taken!")
         auc['teams'][input_code]['owner'] = uid
         auc['teams'][input_code]['owner_name'] = name
+        await refresh_team_message(context, auc, auc['teams'][input_code])
         await update.message.reply_text(f"🎉 <strong>{name}</strong> joined <strong>{auc['teams'][input_code]['name']}</strong>!", parse_mode='HTML')
         return
 
@@ -375,6 +376,7 @@ async def register(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if t['sec_owner']: return await update.message.reply_text("⚠️ 2nd Owner Taken!")
             t['sec_owner'] = uid
             t['sec_owner_name'] = name
+            await refresh_team_message(context, auc, t)
             await update.message.reply_text(f"🎉 <strong>{name}</strong> joined as 2nd Owner!", parse_mode='HTML')
             return
 
