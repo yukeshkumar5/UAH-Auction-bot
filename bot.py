@@ -17,7 +17,7 @@ from telegram.ext import (
 )
 
 # --- CONFIGURATION ---
-TOKEN = os.getenv("BOT_TOKEN")
+TOKEN = "8555822248:AAH_JAB24UtHoZEsVF5CUYcoe_uoDWDwgZM"
 # Enable logging 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO) 
 logger = logging.getLogger(__name__)
@@ -82,6 +82,7 @@ def normalize_player_data(df):
 def generate_code(length=5):
     return ''.join(random.choices(string.ascii_uppercase + string.digits, k=length))
 
+
 def get_player_image(player_name):
     try:
         results = DDGS().images(keywords=f"{player_name} cricketer", region="in-en", safesearch="on", max_results=1)
@@ -144,6 +145,8 @@ def build_team_text(auc, t):
             msg += f"{i}. {p['name']} – {format_price(p['price'])}{tag}\n"
 
     return msg
+def clean_name(s):
+    return re.sub(r'\s+', ' ', s).strip().lower()
 
 # ==============================================================================
 # 1. SETUP (DM ONLY)
@@ -403,56 +406,95 @@ async def retain_player(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if uid not in admin_map: return
     auc = auctions[admin_map[uid]]
-    
+
     try:
-        full_args = " ".join(context.args)
-        code = full_args.split(" ")[0]
-        rest = full_args[len(code):].strip()
-        if "-" in rest:
-            p_name, p_price_str = rest.rsplit("-", 1)
-        else:
-            p_name = " ".join(context.args[1:-1])
-            p_price_str = context.args[-1]
-            
-        price = parse_price(p_price_str)
-        p_name = p_name.strip()
-        
-        if code not in auc['teams']: return await update.message.reply_text("❌ Invalid Team Code")
-        
+        text = " ".join(context.args)
+
+        code = text.split(" ")[0]
+        if code not in auc['teams']:
+            return await update.message.reply_text("❌ Invalid Team Code")
+
         t = auc['teams'][code]
-        t['purse'] -= price
-        t['squad'].append({'name': p_name, 'price': price, 'type': 'retained'})
-        
-        original_len = len(auc['players'])
-        auc['players'] = [p for p in auc['players'] if p['Name'].lower().strip() != p_name.lower().strip()]
-        
-        msg = f"✅ Retained <strong>{p_name}</strong> for {format_price(price)}"
-        if len(auc['players']) < original_len: 
-            msg += "\n🗑 <strong>Removed from Auction List!</strong>"
-        
-        await update.message.reply_text(msg, parse_mode='HTML')
+
+        rest = text[len(code):].strip()
+
+        names_part, prices_part = rest.split("-", 1)
+
+        names = [x.strip() for x in names_part.split(",")]
+        prices = [parse_price(x) for x in prices_part.split(",")]
+
+        if len(names) != len(prices):
+            return await update.message.reply_text("❌ Names and prices count mismatch")
+
+        total = sum(prices)
+
+        if t['purse'] < total:
+            return await update.message.reply_text("❌ Not enough purse")
+
+        msg = ""
+
+        for p_name, price in zip(names, prices):
+            t['purse'] -= price
+            t['squad'].append({
+                'name': p_name,
+                'price': price,
+                'type': 'retained'
+            })
+
+            target = clean_name(p_name)
+
+            original_len = len(auc['players'])
+            auc['players'] = [
+                p for p in auc['players']
+                if clean_name(p['Name']) != target
+            ]
+
+            msg += f"✅ Retained <b>{p_name}</b> for {format_price(price)}\n"
+
+            if len(auc['players']) < original_len:
+                msg += "🗑 Removed from auction\n"
+            else:
+                msg += "⚠️ Not found in auction\n"
+
+        await update.message.reply_text(msg, parse_mode="HTML")
+
     except:
-        await update.message.reply_text("Usage: <code>/retain CODE Player Name - Price</code>", parse_mode='HTML')
+        await update.message.reply_text(
+            "Usage:\n"
+            "/retain CODE name1,name2 - price1,price2",
+            parse_mode="HTML"
+        )
 
 async def edit_rtm_count(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.type != 'private': return
     uid = update.effective_user.id
     if uid not in admin_map: return
     auc = auctions[admin_map[uid]]
-    
+
     try:
         code = context.args[0]
         count = int(context.args[1])
-        if code not in auc['teams']: return await update.message.reply_text("❌ Invalid Team Code")
-        
-        # We adjust rtms_used based on limit to set "Remaining"
-        # RTM Left = Limit - Used
-        # Used = Limit - Target
+
+        if code not in auc['teams']:
+            return await update.message.reply_text("❌ Invalid Team Code")
+
+        t = auc['teams'][code]
+
+        # RTM math
         new_used = auc['rtm_limit'] - count
-        if new_used < 0: new_used = 0 
-        
-        auc['teams'][code]['rtms_used'] = new_used
-        await update.message.reply_text(f"✅ <strong>{auc['teams'][code]['name']}</strong> RTMs set to {count}.", parse_mode='HTML')
+        if new_used < 0:
+            new_used = 0
+
+        t['rtms_used'] = new_used
+
+        # ✅ FORCE LIVE UPDATE (same pipeline as squad changes)
+        await refresh_team_message(context, auc, t)
+
+        await update.message.reply_text(
+            f"✅ <strong>{t['name']}</strong> RTMs set to {count}.",
+            parse_mode='HTML'
+        )
+
     except:
         await update.message.reply_text("Usage: `/rtmedit TEAM_CODE NewCount`")
 
